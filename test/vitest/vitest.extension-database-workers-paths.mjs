@@ -302,6 +302,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt-runtime.authority.test.ts",
   "extensions/codex/src/app-server/run-attempt.settlement.test.ts",
   "extensions/codex/src/app-server/run-attempt.steering.test.ts",
+  "extensions/codex/src/app-server/run-attempt.subsession-delivery.test.ts",
   "extensions/codex/src/app-server/run-attempt.steering-authority.test.ts",
   "extensions/codex/src/app-server/run-attempt.steering-media.test.ts",
   "extensions/codex/src/app-server/run-attempt.steering-settlement.test.ts",
