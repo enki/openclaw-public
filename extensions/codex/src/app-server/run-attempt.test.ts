@@ -1703,7 +1703,8 @@ describe("runCodexAppServerAttempt", () => {
           });
           const bridge = createCodexToolBridgeForTest(turn, tools, registered);
           if (turn === completion && profile === "full") {
-            expect(bridge.availableTools.some((tool) => tool.name === "transcripts")).toBe(false);
+            // Main keeps session-stable definitions; identityless access is denied at invocation.
+            expect(bridge.availableTools.some((tool) => tool.name === "transcripts")).toBe(true);
             const namespace = bridge.specs.find(
               (spec) =>
                 spec.type === "namespace" && spec.tools.some((tool) => tool.name === "transcripts"),
@@ -1718,7 +1719,15 @@ describe("runCodexAppServerAttempt", () => {
                 tool: "transcripts",
                 arguments: { action: "status" },
               }),
-            ).resolves.toMatchObject({ success: false });
+            ).resolves.toMatchObject({
+              success: false,
+              contentItems: [
+                {
+                  type: "inputText",
+                  text: "transcripts are unavailable in this turn: it has no user or operator identity to authorize access.",
+                },
+              ],
+            });
           }
           // Exercise the registration/dispatch namespace boundary once. The host
           // suite owns exhaustive declaration identity and availability checks.
@@ -1755,20 +1764,25 @@ describe("runCodexAppServerAttempt", () => {
             expect(bridge.availableTools.map((tool) => tool.name)).toEqual(
               expect.arrayContaining(["exec", "process"]),
             );
-            for (const tool of [
-              "conversations_send",
-              "plugins",
-              "gateway",
-              "automations",
-              "mobile_ui",
-              "nodes",
-              "openclaw",
-              "portal",
-              "terminal",
-              "computer",
-              "screen",
-            ]) {
-              expect(bridge.availableTools.map((entry) => entry.name)).not.toContain(tool);
+            for (const [tool, args] of [
+              [
+                "conversations_send",
+                {
+                  conversationRef: "conv_00000000000000000000000000000000",
+                  message: "must not run",
+                },
+              ],
+              ["plugins", { action: "list" }],
+              ["gateway", { action: "config.get" }],
+              ["automations", { action: "list" }],
+              ["mobile_ui", { action: "observe" }],
+              ["nodes", { action: "status" }],
+              ["openclaw", { message: "must not run" }],
+              ["portal", { action: "list" }],
+              ["terminal", { action: "list" }],
+              ["computer", { action: "screenshot" }],
+            ] as const) {
+              expect(bridge.availableTools.map((entry) => entry.name)).toContain(tool);
               await expect(
                 bridge.handleToolCall({
                   threadId: "parent-1",
@@ -1778,10 +1792,38 @@ describe("runCodexAppServerAttempt", () => {
                     ? "openclaw_direct"
                     : "openclaw",
                   tool,
-                  arguments: tool === "openclaw" ? { message: "must not run" } : { action: "list" },
+                  arguments: args,
                 }),
-              ).resolves.toMatchObject({ success: false });
+              ).resolves.toMatchObject({
+                success: true,
+                transcriptDetails: { gated: true },
+                contentItems: [
+                  {
+                    type: "inputText",
+                    text: expect.stringMatching(
+                      /needs the owner's authority|outside the authority this completion turn carries/,
+                    ),
+                  },
+                ],
+              });
             }
+            // UI capability ceilings still remove the executable, independently of owner gates.
+            expect(bridge.availableTools.map((entry) => entry.name)).not.toContain("screen");
+            await expect(
+              bridge.handleToolCall({
+                threadId: "parent-1",
+                turnId: "private-completion",
+                callId: "denied-private-screen",
+                namespace: "openclaw",
+                tool: "screen",
+                arguments: { action: "sidebar_show" },
+              }),
+            ).resolves.toMatchObject({
+              success: false,
+              contentItems: [
+                { type: "inputText", text: "OpenClaw tool is not available for this turn: screen" },
+              ],
+            });
           }
           const binding = await startOrResumeThread({
             client: fixture.client,
