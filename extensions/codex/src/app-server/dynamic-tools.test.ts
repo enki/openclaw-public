@@ -1871,12 +1871,11 @@ describe("Codex automation tool references", () => {
           type: "namespace",
           name: "openclaw_direct",
           description: "Inherited declaration",
-          tools: ["automations", "read"].map((name) => ({
-            type: "function",
-            name,
-            description: name,
-            inputSchema: { type: "object", properties: {} },
-          })),
+          tools: createCodexDynamicToolBridge({
+            tools: ["automations", "read"].map((name) => tool(name)),
+            signal: new AbortController().signal,
+            loading: "direct",
+          }).specs.flatMap((spec) => (spec.type === "function" ? [spec] : spec.tools)),
         },
       ],
     });

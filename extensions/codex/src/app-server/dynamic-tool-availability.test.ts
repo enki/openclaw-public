@@ -1,5 +1,5 @@
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -17,6 +17,42 @@ function createCollectorTools(swarm?: false) {
 }
 
 describe("Codex collector availability", () => {
+  it("rejects a declaration changed by final preparation without falling back", async () => {
+    const tools = createCollectorTools();
+    const initial = createCodexDynamicToolBridge({
+      tools,
+      loading: "direct",
+      signal: new AbortController().signal,
+    });
+    const spawn = tools.find((tool) => tool.name === "sessions_spawn")!;
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "effect" }],
+      details: {},
+    }));
+    spawn.execute = execute;
+    const fallback = { ...spawn, execute };
+    const accepted = initial.specs.filter(
+      (spec) => spec.type === "function" && spec.name === spawn.name,
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [spawn],
+      registeredFallbackTools: [fallback],
+      registeredSpecs: accepted,
+      signal: new AbortController().signal,
+    });
+    expect(
+      await bridge.handleToolCall({
+        threadId: "parent",
+        turnId: "turn",
+        callId: "prepared",
+        tool: spawn.name,
+        arguments: { task: "synthetic" },
+      }),
+    ).toMatchObject({ success: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.specs).toEqual(accepted);
+  });
+
   it.each(["direct", "searchable"] as const)(
     "keeps native catalogs frozen across the default-on upgrade with %s loading",
     async (loading) => {
@@ -46,12 +82,9 @@ describe("Codex collector availability", () => {
       });
       expect(resumed.specs).toEqual(nativeSpecs);
       expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(nativeFingerprint);
-      expect(resumed.availableSpecs).toEqual(nativeSpecs);
-      expect(resumed.availableTools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
-      const resumedSpawn = resumed.availableTools.find((tool) => tool.name === "sessions_spawn");
-      expect(resumedSpawn?.parameters).not.toHaveProperty("properties.collect");
-      expect(resumedSpawn?.parameters).toHaveProperty("properties.fastMode");
-      expect(resumedSpawn?.description).not.toContain("collect=true");
+      // Default-on preparation changes the accepted declaration, not just its callable arguments.
+      expect(resumed.availableSpecs).toEqual([]);
+      expect(resumed.availableTools).toEqual([]);
       const rejected = await resumed.handleToolCall({
         callId: "uncollectable-upgrade",
         threadId: "thread",
@@ -60,9 +93,7 @@ describe("Codex collector availability", () => {
         arguments: { task: "inspect", collect: true },
       });
       expect(rejected.success).toBe(false);
-      expect(JSON.stringify(rejected.contentItems)).toMatch(
-        /Collector results are unavailable|Invalid arguments/,
-      );
+      expect(JSON.stringify(rejected.contentItems)).toMatch(/not available for this turn/);
 
       // A fresh native registration uses new factory instances and the omitted Swarm default.
       const tools = createCollectorTools();
@@ -136,16 +167,17 @@ describe("Codex collector availability", () => {
       ...(kind === "registered-surface" ? { registeredSpecs } : {}),
     });
     const executable = bridge.availableTools.find((tool) => tool.name === "sessions_spawn");
-    expect(executable?.parameters).not.toHaveProperty("properties.collect");
-    expect(executable?.parameters).toHaveProperty("properties.fastMode");
-    expect(executable?.description).not.toContain("collect=true");
     if (kind === "registered-surface") {
+      expect(executable).toBeUndefined();
       expect(bridge.specs).toEqual(registeredSpecs);
       expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
         codexDynamicToolsFingerprint(registeredSpecs),
       );
-      expect(bridge.availableSpecs).toEqual(registeredSpecs);
+      expect(bridge.availableSpecs).toEqual([]);
     } else {
+      expect(executable?.parameters).not.toHaveProperty("properties.collect");
+      expect(executable?.parameters).toHaveProperty("properties.fastMode");
+      expect(executable?.description).not.toContain("collect=true");
       for (const specs of [bridge.availableSpecs, bridge.specs]) {
         const spec = flattenCodexDynamicToolFunctions(specs).find(
           (tool) => tool.name === "sessions_spawn",
@@ -175,7 +207,9 @@ describe("Codex collector availability", () => {
     });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.contentItems)).toMatch(
-      /Collector results are unavailable|Invalid arguments/,
+      kind === "registered-surface"
+        ? /not available for this turn/
+        : /Collector results are unavailable|Invalid arguments/,
     );
   });
 });

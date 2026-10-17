@@ -60,6 +60,7 @@ export function buildCodexThreadToolCatalogPatch(
   tools: CodexDynamicToolSpec[],
   acceptedFingerprint: string,
 ): { managedToolCatalog?: { version: 3; tools: CodexDynamicToolSpec[] } } {
+  readCodexThreadToolCatalog(binding);
   if (
     binding?.connectionScope === "supervision" ||
     binding?.managedToolCatalog !== undefined ||

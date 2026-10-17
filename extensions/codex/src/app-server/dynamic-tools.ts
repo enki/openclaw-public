@@ -43,10 +43,6 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import {
-  type JsonSchemaObject,
-  validateJsonSchemaValue,
-} from "openclaw/plugin-sdk/json-schema-runtime";
-import {
   asNonArrayRecord,
   asOptionalRecord,
   isRecord,
@@ -74,6 +70,7 @@ import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
 } from "./dynamic-tool-executable-projection.js";
+import { assertCodexDynamicToolInputMatchesSchema } from "./dynamic-tool-input-validation.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -89,6 +86,7 @@ import {
   prepareCodexRemoteWorkspaceMessageMedia,
   resolveCodexMediaSourceUrls,
 } from "./remote-workspace-media.js";
+import { stabilizeJsonValue } from "./thread-fingerprints.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
@@ -109,41 +107,6 @@ type CodexToolResultHookContext = Pick<
   CodexDynamicToolHookContext,
   "agentId" | "sessionId" | "sessionKey" | "runId" | "channelId"
 >;
-
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
-const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
-
-function assertCodexDynamicToolInputMatchesSchema(params: {
-  toolName: string;
-  schema: JsonSchemaObject;
-  value: unknown;
-}): void {
-  const validation = validateJsonSchemaValue({
-    schema: params.schema,
-    cacheKey: `codex-dynamic-tool-input:${params.toolName}:${JSON.stringify(params.schema)}`,
-    value: params.value,
-  });
-  if (validation.ok) {
-    return;
-  }
-  const visibleErrors = validation.errors.slice(0, MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS);
-  const details = visibleErrors
-    .map((error) => {
-      if (error.text.length <= MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS) {
-        return error.text;
-      }
-      return `${error.text.slice(
-        0,
-        MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS -
-          CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX.length,
-      )}${CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX}`;
-    })
-    .join("; ");
-  const omitted = validation.errors.length - visibleErrors.length;
-  const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
-  throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
-}
 
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
@@ -206,22 +169,40 @@ export function createCodexDynamicToolBridge(params: {
   // Accepted thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
   const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
-  const inheritedNames = inheritedSpecs
-    ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
+  const inheritedDeclarations = inheritedSpecs
+    ? new Map(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => [tool.name, tool]))
     : undefined;
+  const inheritedNames = inheritedDeclarations ? new Set(inheritedDeclarations.keys()) : undefined;
+  const matchesAcceptedDeclaration = (entry: (typeof availableProjection.tools)[number]) => {
+    if (!inheritedDeclarations) {
+      return true;
+    }
+    const accepted = inheritedDeclarations.get(entry.name);
+    return (
+      accepted !== undefined &&
+      accepted.description === entry.description &&
+      JSON.stringify(stabilizeJsonValue(accepted.inputSchema)) ===
+        JSON.stringify(stabilizeJsonValue(entry.inputSchema))
+    );
+  };
   const registrationNames =
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
-  const availableTools = finalized.tools;
+  // Preparers own the final executable definition; compare only after projection.
+  const availableTools = finalized.tools.filter(matchesAcceptedDeclaration);
   const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
     params.registeredFallbackTools ?? [],
     params.hookContext,
   );
-  const registeredFallbackTools = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
+  const fallbackFinalized = finalizeCodexToolAvailability(
+    registeredFallbackProjection.tools.filter(
+      (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
+    ),
   );
+  const registeredFallbackTools = fallbackFinalized.tools.filter(matchesAcceptedDeclaration);
+  registeredFallbackProjection.quarantinedTools.push(...fallbackFinalized.quarantinedTools);
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);

@@ -46,8 +46,9 @@ function nativeSpec(name: string): CodexDynamicToolSpec {
   return {
     type: "function",
     name,
-    description: `Test ${name}`,
-    inputSchema: { type: "object", properties: {}, additionalProperties: true },
+    description: "Test tool",
+    // Match the actual normalized declaration, including its empty required list.
+    inputSchema: { type: "object", properties: {}, additionalProperties: true, required: [] },
   };
 }
 

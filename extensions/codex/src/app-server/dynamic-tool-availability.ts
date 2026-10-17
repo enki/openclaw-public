@@ -27,7 +27,11 @@ export function finalizeCodexToolAvailability(
   const tools: ProjectedCodexDynamicTool<AnyAgentTool>[] = [];
   const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
   for (const { entry, parameters, description } of snapshots) {
-    if (entry.tool.parameters === parameters && entry.tool.description === description) {
+    if (
+      !preparedNames.has(entry.name) &&
+      entry.tool.parameters === parameters &&
+      entry.tool.description === description
+    ) {
       tools.push(entry);
       continue;
     }

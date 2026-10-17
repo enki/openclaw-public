@@ -38,6 +38,7 @@ it("keeps accepted declarations under work protection and applies fresh tools on
   setCodexTestModelSupportsTools(params, true);
   params.runtimePlan = createCodexRuntimePlanFixture();
   let existingAvailable = true;
+  let existingDeclarationChanged = false;
   let addedAvailable = false;
   const existingExecute = vi.fn(async () => ({
     content: [{ type: "text" as const, text: "existing synthetic tool ran" }],
@@ -53,7 +54,15 @@ it("keeps accepted declarations under work protection and applies fresh tools on
       params.hostCapabilities.bindToolSurface(
         [
           ...(existingAvailable
-            ? [{ ...createRuntimeDynamicTool("synthetic_existing"), execute: existingExecute }]
+            ? [
+                {
+                  ...createRuntimeDynamicTool("synthetic_existing"),
+                  ...(existingDeclarationChanged
+                    ? { description: "Changed current declaration." }
+                    : {}),
+                  execute: existingExecute,
+                },
+              ]
             : []),
           ...(addedAvailable
             ? [{ ...createRuntimeDynamicTool("synthetic_added"), execute: addedExecute }]
@@ -92,7 +101,7 @@ it("keeps accepted declarations under work protection and applies fresh tools on
     await finish(first);
 
     addedAvailable = true;
-    existingAvailable = false;
+    existingDeclarationChanged = true;
     const held = runCodexAppServerAttempt({ ...params, runId: "synthetic-protected" }, options);
     await held.waitForTurnAccepted();
     expect(accepted?.managedToolCatalog).toMatchObject({ version: 3 });
@@ -114,6 +123,7 @@ it("keeps accepted declarations under work protection and applies fresh tools on
     release();
     release = () => {};
     existingAvailable = true;
+    existingDeclarationChanged = false;
     const idle = runCodexAppServerAttempt({ ...params, runId: "synthetic-idle" }, options);
     await idle.waitForTurnAccepted();
     expect(await call("synthetic_added")).toMatchObject({ success: true });
