@@ -176,6 +176,10 @@ async function createRunParams(fixture: NativeFixture) {
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
   params.config = { tools: { web: { search: { enabled: false } } } };
+  // This fixture calls the attempt directly, so request the host's deferred capture.
+  params.onSettledTurn = async (attempt, captureContext) => {
+    attempt.settledTurnFinalizationContext = await captureContext();
+  };
   setRuntimeConfigSnapshot(params.config);
   setCodexTestToolFactory(params, () => []);
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
