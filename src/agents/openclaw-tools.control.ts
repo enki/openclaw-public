@@ -25,6 +25,14 @@ export function createHostedControlTools(
 ): Array<AnyAgentTool | null> {
   const { nodesTool, sessionAgentId, gatewayCallerAccountId, deliveryContext, sessionConfig } =
     prepared;
+  const screenTool = bindCoreToolDeclaration(
+    createScreenTool({
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentId: sessionAgentId,
+    }),
+  );
+  // Client capabilities select this turn's executor, not the producer's declaration.
+  onCoreDeclaration?.(screenTool);
   return [
     nodesTool,
     bindCoreToolDeclaration(createMobileUiTool({ idempotencyScope: options?.runId })),
@@ -63,12 +71,7 @@ export function createHostedControlTools(
       requesterAgentIdOverride: sessionAgentId,
       config: sessionConfig,
     }),
-    bindCoreToolDeclaration(
-      createScreenTool({
-        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-        agentId: sessionAgentId,
-      }),
-    ),
+    screenTool,
     createThemeTool(),
     ...(options?.sandboxed
       ? []

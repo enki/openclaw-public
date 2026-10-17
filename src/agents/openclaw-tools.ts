@@ -452,7 +452,12 @@ function* createOpenClawToolsSteps(
         onPlanSaved: options?.onProgressCardPlanSaved,
       })
     : null;
-  const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const transcriptsTool = resolveTranscriptsTool(
+    resolvedConfig,
+    sessionAgentId,
+    options,
+    onCoreDeclaration,
+  );
   const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),

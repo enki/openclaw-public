@@ -47,7 +47,8 @@ that host's `createToolSurfaceAsync`. The result contains only `name`,
 `description`, `parameters`, and optional `catalogMode` for the participating
 built-in core tools: `automations`, `computer`, `conversations_list`,
 `conversations_send`, `conversations_turn`, `exec`, `gateway`, `mobile_ui`, `nodes`,
-`openclaw`, `plugins`, `portal`, `process`, `screen`, `sessions`, `sessions_send`, and `terminal`.
+`openclaw`, `plugins`, `portal`, `process`, `screen`, `sessions`, `sessions_send`,
+`terminal`, and `transcripts`.
 Direct-only declarations retain their namespace and loading semantics.
 
 These definitions share the executable core producers' literal metadata and
@@ -61,9 +62,10 @@ without an attached worker, or retain a session-scoped executor that rejects
 other environments. A declaration is not an execution grant.
 
 Declaration availability still follows the actual core producer's embedded,
-sandbox, client and model capability restrictions, followed by the same persistent
-policy selection. For example, `screen` still requires the requesting client's
-UI capability, and `computer` requires a compatible model and transport. The
+sandbox and model capability restrictions, followed by persistent policy selection.
+The `screen` declaration remains stable when client capabilities change, while its
+executor still requires the requesting client's UI capability. The `computer`
+declaration still requires a compatible model and transport. The
 `openclaw` description uses the actual prepared execution policy, so genuine
 policy changes still invalidate the catalog.
 Shell reminder guidance follows persistent declaration availability, while exec's
@@ -74,7 +76,7 @@ thread catalog, retain admission, or provide plugin declarations. Foreign arrays
 closed hosts, and revoked admissions are rejected. Construction checks authority
 again after asynchronous preparation. Plugin factories continue to receive the
 actual sender, and plugin replacements are not classified as core by name.
-Sender-dependent plugin definitions, including bundled plugins' owner-gated
+Sender-dependent third-party plugin definitions, including owner-gated
 factories, can therefore still change a native thread's catalog. This core-only
 operation does not add a plugin descriptor API. Prepared executable definitions
 keep their existing precedence.
@@ -502,3 +504,43 @@ Call it for each turn, after the final tool surface is known. Pass
 is unavailable. Carry the result through the native runtime's existing
 per-turn application or developer context instead of appending it to stable
 thread instructions.
+
+### Codex control-tool registration
+
+Codex management and supervision tools keep the same literal declarations across
+owner and private turns. Native thread access still requires user-home scope or
+enabled supervision; compatibility tools still require enabled supervision.
+Every execution checks the current invocation and owner before accessing state.
+Raw transcript and mutation permissions continue to be checked at their existing
+effect boundaries. Seeing a declaration does not grant execution permission.
+
+The core `transcripts` declaration similarly remains registered across internal
+turns without caller provenance. Such turns receive no transcript executor.
+Explicit transcript disablement and configured tool denies remove the declaration.
+
+### Native thread catalog publication
+
+A Codex thread fixes its dynamic tool declarations at creation. OpenClaw builds the
+currently desired catalog from fresh producer declarations on every attempt.
+When a changed catalog would replace a thread protected by outstanding native
+work, the thread owner retains the declarations Codex already accepted.
+Immutable tool guidance follows those declarations; per-turn skills, memory,
+watched-session context, and permission checks still use the current tool surface.
+Fresh executors remain subject to current policy: revoked or removed tools fail
+immediately, and newly discovered tools wait until they can be registered. Once
+idle, the next attempt applies the latest desired catalog through the existing
+thread replacement and history handoff.
+
+The existing native binding records an acknowledged catalog snapshot after
+creation or verified compatible reuse. This is data tied to the binding's catalog
+fingerprint; it grants no execution authority and has no broad configuration
+fingerprint. Existing local version 1 and 2 snapshots remain readable without
+rewriting the binding. Version 3 stores only the accepted declarations. Native
+supervision continues to read its original native-owned declarations.
+
+Older managed bindings without a snapshot can recover the exact catalog from
+verified local native metadata while protected. If that metadata is unavailable
+(for example, a remote legacy binding), the thread is preserved and the failure
+is reported; no catalog is guessed. A receiptless resume with no recorded catalog
+fingerprint does not establish which declarations the existing native thread
+accepted. Other native configuration and permission-change guards still apply.

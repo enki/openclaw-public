@@ -53,7 +53,11 @@ async function surface(
 }
 
 it("projects fresh core declarations without granting private execution", async () => {
-  const options = { clientCaps: ["ui-commands"], modelHasVision: true };
+  const options = {
+    clientCaps: ["ui-commands"],
+    modelHasVision: true,
+    senderId: "synthetic-owner",
+  };
   const owner = await surface(true, [], options);
   const privateTurn = await surface(false, [], options);
   expect(privateTurn.tools.map((tool) => tool.name)).not.toContain("conversations_send");
@@ -113,6 +117,23 @@ it("projects fresh core declarations without granting private execution", async 
   expect(privateTurn.tools.map((tool) => tool.name)).not.toContain("portal");
   privateTurn.closeHost();
   expect(() => read!(privateTurn.tools)).toThrow(/active|closed/);
+});
+
+it("keeps transcript registration across caller-provenance changes without publishing an executor", async () => {
+  const owner = await surface(true, [], { senderId: "synthetic-owner" });
+  const internal = await surface(false, [], { senderId: undefined });
+  const declaration = (host: Awaited<ReturnType<typeof surface>>) =>
+    host.hostCapabilities.readCoreToolDeclarations!(host.tools).find(
+      (tool) => tool.name === "transcripts",
+    );
+  expect(owner.tools.some((tool) => tool.name === "transcripts")).toBe(true);
+  expect(internal.tools.some((tool) => tool.name === "transcripts")).toBe(false);
+  expect(declaration(internal)).toEqual(declaration(owner));
+  expect(declaration(internal)).toHaveProperty("parameters.properties.action");
+  const disabled = await surface(false, [], { config: { transcripts: { enabled: false } } });
+  const denied = await surface(false, ["transcripts"]);
+  expect(declaration(disabled)).toBeUndefined();
+  expect(declaration(denied)).toBeUndefined();
 });
 
 it("retains configured denies and rejects foreign surfaces and revoked admissions", async () => {
@@ -204,12 +225,29 @@ it("rejects retained declaration readers after lifecycle rotation", async () => 
   expect(() => read(host.tools)).toThrow(/active|closed/);
 });
 
-it("retains client, model, sandbox, transport and embedded declaration availability", async () => {
+it("keeps screen declarations across client capabilities without granting execution", async () => {
+  const declaration = (host: Awaited<ReturnType<typeof surface>>) =>
+    host.hostCapabilities.readCoreToolDeclarations!(host.tools).find(
+      (tool) => tool.name === "screen",
+    );
+  const withoutClient = await surface(true);
+  const withoutClientDeclaration = declaration(withoutClient);
+  expect(withoutClientDeclaration).toBeDefined();
+  expect(withoutClient.tools.some((tool) => tool.name === "screen")).toBe(false);
+  const withClient = await surface(true, [], { clientCaps: ["ui-commands"] });
+  expect(declaration(withClient)).toEqual(withoutClientDeclaration);
+  expect(withClient.tools.some((tool) => tool.name === "screen")).toBe(true);
+  const denied = await surface(true, ["screen"], { clientCaps: ["ui-commands"] });
+  expect(declaration(denied)).toBeUndefined();
+  expect(denied.tools.some((tool) => tool.name === "screen")).toBe(false);
+});
+
+it("retains model, sandbox, transport and embedded declaration availability", async () => {
   const names = async (options: Parameters<typeof surface>[2] = {}) => {
     const host = await surface(false, [], options);
     return host.hostCapabilities.readCoreToolDeclarations!(host.tools).map((tool) => tool.name);
   };
-  expect(await names()).not.toContain("screen");
+  expect(await names()).toContain("screen");
   expect(await names({ clientCaps: ["ui-commands"] })).toContain("screen");
   expect(await names({ modelHasVision: false })).not.toContain("computer");
   expect(await names({ computerTransport: null })).not.toContain("computer");
@@ -228,7 +266,7 @@ it("retains client, model, sandbox, transport and embedded declaration availabil
     embeddedHost.hostCapabilities.readCoreToolDeclarations!(embeddedHost.tools).map(
       (tool) => tool.name,
     ),
-  ).toEqual(["exec", "process"]);
+  ).toEqual(["exec", "process", "transcripts"]);
   expect(embeddedHost.tools.map((tool) => tool.name)).toEqual(
     expect.arrayContaining(["exec", "process"]),
   );

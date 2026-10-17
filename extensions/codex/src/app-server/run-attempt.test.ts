@@ -1648,6 +1648,7 @@ describe("runCodexAppServerAttempt", () => {
       const owner = createRunParams();
       owner.disableTools = false;
       owner.senderIsOwner = true;
+      owner.senderId = "synthetic-owner";
       owner.messageChannel = "discord";
       owner.messageProvider = "discord";
       if (profile === "full") {
@@ -1662,6 +1663,8 @@ describe("runCodexAppServerAttempt", () => {
       const completion = {
         ...owner,
         senderIsOwner: false,
+        senderId: undefined,
+        clientCaps: undefined,
         sourceReplyDeliveryMode: "automatic" as const,
         inputProvenance: {
           kind: "inter_session" as const,
@@ -1690,6 +1693,24 @@ describe("runCodexAppServerAttempt", () => {
             nativeToolSurfaceEnabled,
           });
           const bridge = createCodexToolBridgeForTest(turn, tools, registered);
+          if (turn === completion && profile === "full") {
+            expect(bridge.availableTools.some((tool) => tool.name === "transcripts")).toBe(false);
+            const namespace = bridge.specs.find(
+              (spec) =>
+                spec.type === "namespace" && spec.tools.some((tool) => tool.name === "transcripts"),
+            );
+            assert(namespace?.type === "namespace");
+            await expect(
+              bridge.handleToolCall({
+                threadId: "parent-1",
+                turnId: "private-completion",
+                callId: "denied-private-transcript",
+                namespace: namespace.name,
+                tool: "transcripts",
+                arguments: { action: "status" },
+              }),
+            ).resolves.toMatchObject({ success: false });
+          }
           // Exercise the registration/dispatch namespace boundary once. The host
           // suite owns exhaustive declaration identity and availability checks.
           if (turn === completion && !nativeToolSurfaceEnabled) {
