@@ -35,9 +35,10 @@ const NATURAL_DELEGATION_ACK_MESSAGE = [
   "Internal OpenClaw voice control note.",
   "Do not delegate this note or call tools.",
   "The request may not be accepted yet.",
-  "Briefly acknowledge it in your own words and the user's language, under 8 words.",
-  "Fit the request; vary naturally and avoid repeating recent acknowledgments.",
-  "Do not claim acceptance or completion, guess an answer, or promise one.",
+  "For this launch acknowledgment only, confirm hearing the request; never imply checking or doing it.",
+  "Reply in your own words and the user's language, under 8 words; vary naturally and avoid repeating recent acknowledgments.",
+  'Do not imply acceptance, work begun, or completion: no "on it", "taking that", "accepted", or equivalents in any language.',
+  "Do not guess an answer or promise one.",
 ].join("\n");
 
 type PendingDelegation = {
