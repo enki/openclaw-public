@@ -60,6 +60,7 @@ import {
   invalidateCodexComputerFrame,
   type CodexComputerContextEpoch,
 } from "./computer-context.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
@@ -90,7 +91,6 @@ import {
   prepareCodexRemoteWorkspaceMessageMedia,
   resolveCodexMediaSourceUrls,
 } from "./remote-workspace-media.js";
-import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
@@ -219,8 +219,8 @@ export function createCodexDynamicToolBridge(params: {
     const accepted = inheritedFunctions.get(entry.name);
     return (
       accepted !== undefined &&
-      fingerprintJsonObject({ description: entry.description, inputSchema: entry.inputSchema }) ===
-        fingerprintJsonObject({
+      fingerprintCodexPolicy({ description: entry.description, inputSchema: entry.inputSchema }) ===
+        fingerprintCodexPolicy({
           description: accepted.description,
           inputSchema: accepted.inputSchema,
         })

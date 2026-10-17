@@ -4,6 +4,7 @@ import {
   normalizeHeartbeatToolResponse,
   type AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeOpenAIStrictCompatSchema } from "openclaw/plugin-sdk/provider-tools";
 import type { CodexPluginConfig } from "./config.js";
 import type { CodexToolDescriptor } from "./dynamic-tool-catalog.js";
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
@@ -51,7 +52,7 @@ export function selectInactiveCodexHeartbeatResponseTool(params: {
     label: descriptor.name,
     description: descriptor.description,
     // The no-op fallback must validate the exact declaration already accepted by Codex.
-    parameters: descriptor.parameters,
+    parameters: normalizeOpenAIStrictCompatSchema(descriptor.parameters),
     execute: async (_toolCallId, args) => {
       const response = normalizeHeartbeatToolResponse(args);
       if (!response) {
