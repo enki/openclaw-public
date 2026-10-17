@@ -14,8 +14,9 @@ export async function resolveReplySteeringAuthority(
 ) {
   const activeFingerprint = operation?.toolAuthorityFingerprint;
   const activeRoute = operation?.toolAuthorityRoute;
+  const input = operation?.normalizeIncomingToolAuthorityInput?.(followupRun) ?? followupRun;
   const incoming = await prepareFollowupRunToolAuthorityFingerprint(
-    followupRun,
+    input,
     undefined,
     assertCurrent,
   );
@@ -24,7 +25,7 @@ export async function resolveReplySteeringAuthority(
   try {
     const incomingFingerprint = incoming.read();
     atActiveRoute = activeRoute
-      ? await prepareFollowupRunToolAuthorityFingerprint(followupRun, activeRoute, assertCurrent)
+      ? await prepareFollowupRunToolAuthorityFingerprint(input, activeRoute, assertCurrent)
       : undefined;
     const incomingAtActiveRoute = atActiveRoute?.read();
     assertCurrent();

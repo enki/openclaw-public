@@ -61,6 +61,7 @@ describe("ordinary steering into automatic model fallback", () => {
           }
         },
       });
+      run.run.clientCaps = ["ui-commands"];
       const operation = createReplyOperation({
         sessionKey: key,
         sessionId: run.run.sessionId,
@@ -68,6 +69,8 @@ describe("ordinary steering into automatic model fallback", () => {
       });
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
       await operation.bindToolAuthorityRouteAsync(run.run);
+      run.run.clientCaps = ["ui-commands", "ui-tool-images"];
+      run.run.gatewayUiCommandTarget = { connId: "new-tab", profileId: "incoming-user" };
       const injected = vi.fn(async () => {});
       const replacementInjected = vi.fn(async () => {});
       if (!holdBackend) {
@@ -183,6 +186,11 @@ describe("ordinary steering into automatic model fallback", () => {
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(typing.cleanup).toHaveBeenCalledOnce();
+        expect(run.run.clientCaps).toEqual(["ui-commands", "ui-tool-images"]);
+        expect(run.run.gatewayUiCommandTarget).toEqual({
+          connId: "new-tab",
+          profileId: "incoming-user",
+        });
       } finally {
         resume.resolve();
         await incoming.catch(() => {});
@@ -195,6 +203,11 @@ describe("ordinary steering into automatic model fallback", () => {
 
   it.each([
     "automatic",
+    "same-profile-caps",
+    "same-profile-legacy-snapshot",
+    "same-profile-exec-change",
+    "same-profile-config-change",
+    "same-profile-caps-narrower",
     "cross-profile",
     "cross-profile-pending",
     "policy-fallback",
@@ -255,7 +268,7 @@ describe("ordinary steering into automatic model fallback", () => {
         modelPolicy,
         assertCurrent() {},
       });
-    if (crossProfile) {
+    if (crossProfile || scenario.startsWith("same-profile")) {
       run.operatorAuthority = operator("alice");
       Object.assign(run.run, {
         senderId: "alice-sender",
@@ -265,7 +278,12 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+    const snapshot = prepareReplyToolAuthority(run);
+    await operation.bindToolAuthoritySnapshotAsync(
+      scenario === "same-profile-legacy-snapshot"
+        ? { ...snapshot, normalizeIncomingInput: undefined }
+        : snapshot,
+    );
     operation.setPhase("running");
     const delivered: string[] = [];
     const candidates: string[] = [];
@@ -362,9 +380,21 @@ describe("ordinary steering into automatic model fallback", () => {
       } else if (scenario === "changed-tools") {
         run.toolsAllow = ["read"];
       }
+      if (scenario === "same-profile-caps" || scenario === "same-profile-legacy-snapshot") {
+        run.run.clientCaps = ["ui-commands", "ui-tool-images"];
+      } else if (scenario === "same-profile-caps-narrower") {
+        run.run.clientCaps = [];
+      } else if (scenario === "same-profile-exec-change") {
+        run.run.execOverrides = { security: "deny" };
+      } else if (scenario === "same-profile-config-change") {
+        run.run.config = { ...run.run.config, tools: { deny: ["exec"] } };
+      }
       const resultState: ReplyOperationRunState = {};
       const shouldSteer =
-        scenario === "automatic" || scenario === "policy-fallback" || crossProfile;
+        scenario === "automatic" ||
+        scenario === "policy-fallback" ||
+        scenario === "same-profile-caps" ||
+        crossProfile;
       if (crossProfile) {
         run.operatorAuthority = operator("bob");
         Object.assign(run.run, {

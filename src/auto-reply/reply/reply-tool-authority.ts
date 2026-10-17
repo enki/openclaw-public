@@ -291,6 +291,27 @@ function resolvePreparedReplyToolAuthorityFingerprint(
   );
 }
 
+function normalizeIncomingClientDiscovery(
+  snapshot: ReplyToolAuthorityInput,
+  input: ReplyToolAuthorityInput,
+): ReplyToolAuthorityInput {
+  const incoming = { ...input, run: { ...input.run } };
+  if (
+    incoming.operatorAuthority &&
+    snapshot.operatorAuthority?.profileId === incoming.operatorAuthority.profileId
+  ) {
+    // Steering can add client features without expanding this turn's frozen tools.
+    if ((snapshot.run.clientCaps ?? []).every((cap) => incoming.run.clientCaps?.includes(cap))) {
+      incoming.run.clientCaps = snapshot.run.clientCaps ? [...snapshot.run.clientCaps] : undefined;
+    }
+    // A newly connected UI cannot add a personal target to a headless turn.
+    if (!snapshot.run.gatewayUiCommandTarget) {
+      incoming.run.gatewayUiCommandTarget = undefined;
+    }
+  }
+  return incoming;
+}
+
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: ReplyToolAuthorityNarrow,
@@ -339,21 +360,22 @@ export function prepareReplyToolAuthority(
     },
   };
   const projectInput = (overlay?: ReplyToolAuthorityOverlay) => {
-    const incoming = overlay ? applyReplyToolAuthorityOverlay(snapshot, overlay) : snapshot;
+    const incoming = overlay
+      ? normalizeIncomingClientDiscovery(
+          snapshot,
+          applyReplyToolAuthorityOverlay(snapshot, overlay),
+        )
+      : snapshot;
     if (
       overlay?.operatorAuthority &&
-      snapshot.operatorAuthority?.profileId === overlay.operatorAuthority.profileId
+      snapshot.operatorAuthority?.profileId === overlay.operatorAuthority.profileId &&
+      snapshot.run.trustedInternalHandoff &&
+      overlay.senderIsOwner &&
+      (!overlay.inputProvenance || overlay.inputProvenance.kind === "external_user")
     ) {
-      // Steering can add client features without expanding this turn's frozen tools.
-      if ((snapshot.run.clientCaps ?? []).every((cap) => overlay.clientCaps?.includes(cap))) {
-        incoming.run.clientCaps = snapshot.run.clientCaps
-          ? [...snapshot.run.clientCaps]
-          : undefined;
-      }
-      // A newly connected UI cannot add a personal target to a headless turn.
-      if (!snapshot.run.gatewayUiCommandTarget) {
-        incoming.run.gatewayUiCommandTarget = undefined;
-      }
+      // A human input joins the completion's verified execution scope; it does not replace it.
+      incoming.run.trustedInternalHandoff = snapshot.run.trustedInternalHandoff;
+      incoming.run.inputProvenance = snapshot.run.inputProvenance;
     }
     return incoming;
   };
@@ -512,6 +534,10 @@ export function prepareReplyToolAuthority(
       senderId: snapshot.run.senderId,
       senderName: snapshot.run.senderName,
       gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
+    },
+    normalizeIncomingInput: (input: ReplyToolAuthorityInput) => {
+      assertOpen();
+      return normalizeIncomingClientDiscovery(snapshot, input);
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) => {

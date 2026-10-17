@@ -138,6 +138,7 @@ type OperationToolAuthority = Pick<
   | "bindToolAuthoritySnapshotAsync"
   | "projectToolAuthorityFingerprint"
   | "projectToolAuthorityFingerprintAsync"
+  | "normalizeIncomingToolAuthorityInput"
   | "bindToolAuthorityRoute"
   | "bindToolAuthorityRouteAsync"
   | "setAutomaticFallbackRoute"
@@ -249,6 +250,15 @@ export function createReplyOperationToolAuthority(lifecycle: {
         value.close?.();
         throw error;
       }
+    },
+    normalizeIncomingToolAuthorityInput(input) {
+      if (!lifecycle.isOpen() || !snapshot || !route) {
+        return input;
+      }
+      const assertCurrent = lifecycle.captureCurrent();
+      const normalized = snapshot.normalizeIncomingInput?.(input) ?? input;
+      assertCurrent();
+      return normalized;
     },
     projectToolAuthorityFingerprint(overlay) {
       warnPluginSdkDeprecation({

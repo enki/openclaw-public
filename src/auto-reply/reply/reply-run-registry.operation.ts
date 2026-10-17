@@ -415,6 +415,7 @@ export function createReplyOperation(params: {
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
     projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
+    normalizeIncomingToolAuthorityInput: toolAuthority.normalizeIncomingToolAuthorityInput,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
