@@ -14,7 +14,10 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
-import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import { readCodexThreadToolCatalog } from "./thread-tool-catalog.js";
 
 setupRunAttemptTestHooks();
@@ -148,3 +151,62 @@ it("keeps accepted declarations under work protection and applies fresh tools on
     harness.close();
   }
 });
+
+it.each(["malformed", "mismatched"] as const)(
+  "refuses %s receipts before compatible warm reuse",
+  async (kind) => {
+    const harness = createStartedThreadHarness(
+      async (method) =>
+        method === "thread/start" ? threadStartResult("synthetic-receipt-thread") : undefined,
+      { persistedThreads: [] },
+    );
+    const params = createParams(path.join(tempDir, "receipt-reuse.jsonl"), tempDir);
+    params.timeoutMs = 60_000;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    let release = () => {};
+    try {
+      const first = runCodexAppServerAttempt(params);
+      await first.waitForTurnAccepted();
+      await harness.completeTurn({ threadId: "synthetic-receipt-thread", turnId: "turn-1" });
+      await first;
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      if (!binding) {
+        throw new Error("Synthetic binding was not accepted");
+      }
+      const corrupt = {
+        ...binding,
+        managedToolCatalog:
+          kind === "malformed"
+            ? { version: 3, tools: "invalid" }
+            : {
+                version: 3,
+                tools: [
+                  {
+                    type: "function",
+                    name: "synthetic_different",
+                    description: "Different receipt",
+                    inputSchema: { type: "object", properties: {} },
+                  },
+                ],
+              },
+      };
+      await writeCodexAppServerBinding(params.sessionFile, corrupt);
+      release = protectCodexAppServerLiveThread(harness.client, binding.threadId);
+      const before = harness.requests.filter(({ method }) => method === "turn/start").length;
+      const resumed = runCodexAppServerAttempt({ ...params, runId: "synthetic-corrupt-reuse" });
+      // Finish an incorrectly admitted turn so the pre-fix regression fails without hanging.
+      const settleUnexpectedAdmission = resumed.waitForTurnAccepted().then(
+        () => harness.completeTurn({ threadId: binding.threadId, turnId: "turn-1" }),
+        () => {},
+      );
+      await expect(resumed).rejects.toThrow(/saved Codex thread tool catalog.*thread is preserved/);
+      await settleUnexpectedAdmission;
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(before);
+      expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(corrupt);
+    } finally {
+      release();
+      harness.close();
+    }
+  },
+);

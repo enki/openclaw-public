@@ -54,6 +54,7 @@ import {
 import { mediaResult, textToolResult } from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  flattenCodexDynamicToolFunctions,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
@@ -1871,12 +1872,13 @@ describe("Codex automation tool references", () => {
           type: "namespace",
           name: "openclaw_direct",
           description: "Inherited declaration",
-          tools: ["automations", "read"].map((name) => ({
-            type: "function",
-            name,
-            description: name,
-            inputSchema: { type: "object", properties: {} },
-          })),
+          tools: flattenCodexDynamicToolFunctions(
+            createCodexDynamicToolBridge({
+              tools: [tool("automations"), tool("read")],
+              loading: "direct",
+              signal: new AbortController().signal,
+            }).specs,
+          ),
         },
       ],
     });

@@ -24,6 +24,7 @@ export async function selectCodexProtectedThreadToolCatalog(
   const { connection } = runtime;
   const { mutable, params, runAbortController, agentDir } = connection;
   const binding = mutable.startupBinding;
+  const acceptedCatalog = readCodexThreadToolCatalog(binding);
   if (
     !binding ||
     areCodexDynamicToolFingerprintsCompatible({
@@ -60,7 +61,7 @@ export async function selectCodexProtectedThreadToolCatalog(
     // Older managed bindings have no host snapshot. Admit only the exact native
     // declarations from their verified original local home; never guess a catalog.
     return (
-      readCodexThreadToolCatalog(binding) ??
+      acceptedCatalog ??
       (await loadCodexNativeToolCatalog({
         client,
         binding,

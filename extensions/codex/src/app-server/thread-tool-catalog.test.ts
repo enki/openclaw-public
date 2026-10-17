@@ -64,6 +64,9 @@ it.each([
 ])("preserves the thread when a saved receipt is invalid: %j", (managedToolCatalog) => {
   const binding = { dynamicToolsFingerprint: fingerprint, managedToolCatalog };
   expect(() => readCodexThreadToolCatalog(binding)).toThrow(/thread is preserved/);
+  expect(() => buildCodexThreadToolCatalogPatch(binding, tools, fingerprint)).toThrow(
+    /thread is preserved/,
+  );
 });
 
 it("requires saved fingerprint evidence and preserves an accepted empty catalog", () => {

@@ -68,6 +68,7 @@ import {
   projectCodexDynamicTools,
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
+  type ProjectedCodexDynamicTool,
 } from "./dynamic-tool-catalog.js";
 import { convertToolContents, enforceWholeSkillResult } from "./dynamic-tool-content.js";
 import {
@@ -89,6 +90,7 @@ import {
   prepareCodexRemoteWorkspaceMessageMedia,
   resolveCodexMediaSourceUrls,
 } from "./remote-workspace-media.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
@@ -206,21 +208,39 @@ export function createCodexDynamicToolBridge(params: {
   // Accepted thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
   const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
-  const inheritedNames = inheritedSpecs
-    ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
+  const inheritedFunctions = inheritedSpecs
+    ? new Map(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => [tool.name, tool]))
     : undefined;
+  const inheritedNames = inheritedFunctions ? new Set(inheritedFunctions.keys()) : undefined;
+  const matchesAcceptedDefinition = (entry: ProjectedCodexDynamicTool<CodexToolDescriptor>) => {
+    if (!inheritedFunctions) {
+      return true;
+    }
+    const accepted = inheritedFunctions.get(entry.name);
+    return (
+      accepted !== undefined &&
+      fingerprintJsonObject({ description: entry.description, inputSchema: entry.inputSchema }) ===
+        fingerprintJsonObject({
+          description: accepted.description,
+          inputSchema: accepted.inputSchema,
+        })
+    );
+  };
   const registrationNames =
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
-  const availableTools = finalized.tools;
+  const availableTools = finalized.tools.filter(matchesAcceptedDefinition);
   const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
     params.registeredFallbackTools ?? [],
     params.hookContext,
   );
   const registeredFallbackTools = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
+    (entry) =>
+      registrationNames.has(entry.name) &&
+      !finalized.preparedNames.has(entry.name) &&
+      matchesAcceptedDefinition(entry),
   );
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {

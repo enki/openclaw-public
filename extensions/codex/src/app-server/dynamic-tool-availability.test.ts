@@ -46,12 +46,8 @@ describe("Codex collector availability", () => {
       });
       expect(resumed.specs).toEqual(nativeSpecs);
       expect(codexDynamicToolsFingerprint(resumed.specs)).toBe(nativeFingerprint);
-      expect(resumed.availableSpecs).toEqual(nativeSpecs);
-      expect(resumed.availableTools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
-      const resumedSpawn = resumed.availableTools.find((tool) => tool.name === "sessions_spawn");
-      expect(resumedSpawn?.parameters).not.toHaveProperty("properties.collect");
-      expect(resumedSpawn?.parameters).toHaveProperty("properties.fastMode");
-      expect(resumedSpawn?.description).not.toContain("collect=true");
+      expect(resumed.availableSpecs).toEqual([]);
+      expect(resumed.availableTools).toEqual([]);
       const rejected = await resumed.handleToolCall({
         callId: "uncollectable-upgrade",
         threadId: "thread",
@@ -61,7 +57,7 @@ describe("Codex collector availability", () => {
       });
       expect(rejected.success).toBe(false);
       expect(JSON.stringify(rejected.contentItems)).toMatch(
-        /Collector results are unavailable|Invalid arguments/,
+        /Collector results are unavailable|Invalid arguments|not available for this turn/,
       );
 
       // A fresh native registration uses new factory instances and the omitted Swarm default.
@@ -136,15 +132,19 @@ describe("Codex collector availability", () => {
       ...(kind === "registered-surface" ? { registeredSpecs } : {}),
     });
     const executable = bridge.availableTools.find((tool) => tool.name === "sessions_spawn");
-    expect(executable?.parameters).not.toHaveProperty("properties.collect");
-    expect(executable?.parameters).toHaveProperty("properties.fastMode");
-    expect(executable?.description).not.toContain("collect=true");
+    if (kind === "registered-surface") {
+      expect(executable).toBeUndefined();
+    } else {
+      expect(executable?.parameters).not.toHaveProperty("properties.collect");
+      expect(executable?.parameters).toHaveProperty("properties.fastMode");
+      expect(executable?.description).not.toContain("collect=true");
+    }
     if (kind === "registered-surface") {
       expect(bridge.specs).toEqual(registeredSpecs);
       expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
         codexDynamicToolsFingerprint(registeredSpecs),
       );
-      expect(bridge.availableSpecs).toEqual(registeredSpecs);
+      expect(bridge.availableSpecs).toEqual([]);
     } else {
       for (const specs of [bridge.availableSpecs, bridge.specs]) {
         const spec = flattenCodexDynamicToolFunctions(specs).find(
@@ -175,7 +175,7 @@ describe("Codex collector availability", () => {
     });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.contentItems)).toMatch(
-      /Collector results are unavailable|Invalid arguments/,
+      /Collector results are unavailable|Invalid arguments|not available for this turn/,
     );
   });
 });

@@ -43,12 +43,13 @@ function createBridge(options: Partial<Parameters<typeof createCodexDynamicToolB
 }
 
 function nativeSpec(name: string): CodexDynamicToolSpec {
-  return {
-    type: "function",
-    name,
-    description: `Test ${name}`,
-    inputSchema: { type: "object", properties: {}, additionalProperties: true },
-  };
+  const [spec] = createBridge({
+    tools: [tool(name)],
+    registeredTools: [tool(name)],
+    loading: "direct",
+  }).specs;
+  ok(spec, "synthetic native declaration was not prepared");
+  return spec;
 }
 
 function heartbeatCall(notify: boolean) {
