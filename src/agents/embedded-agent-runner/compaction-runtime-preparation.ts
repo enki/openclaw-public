@@ -114,8 +114,8 @@ export function resolveCompactionRuntimeSelection(params: {
       authProfileId: target.authProfileId,
     }),
     provider,
-    runtimeProvider: target.runtimeProvider ?? provider,
-    contextConfigProvider: target.contextProvider ?? provider,
+    runtimeProvider: provider,
+    contextConfigProvider: provider,
     modelId,
   };
 }
