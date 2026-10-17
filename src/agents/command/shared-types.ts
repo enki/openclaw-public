@@ -160,6 +160,8 @@ export type AgentRunInputContext = {
   inputProvenance?: InputProvenance;
   heartbeatEventQueueSessionKey?: string;
   extraSystemPrompt?: string;
+  /** Exact producer-owned transient section; all unannotated instructions remain persistent. */
+  extraSystemPromptTurnContext?: { start: number; text: string };
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */

@@ -110,6 +110,7 @@ import {
   setCodexTestModelSupportsTools,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
+  startAttempt,
   tempDir,
   threadStartResult,
   turnStartResult,
@@ -2465,7 +2466,8 @@ describe("runCodexAppServerAttempt", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
     let planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
+      (request) =>
+        request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
     );
     expect(planRestoreRequests[0]?.params).toMatchObject({
       threadId: "thread-1",
@@ -2525,7 +2527,8 @@ describe("runCodexAppServerAttempt", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-2" }),
     );
     planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
+      (request) =>
+        request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
     );
     expect(planRestoreRequests).toHaveLength(2);
     expect(planRestoreRequests[1]?.params).toMatchObject({
@@ -2598,7 +2601,10 @@ describe("runCodexAppServerAttempt", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-3" }),
     );
     expect(
-      harness.requests.filter((request) => request.method === "thread/inject_items"),
+      harness.requests.filter(
+        (request) =>
+          request.method === "thread/inject_items" && isUserHistoryInjection(request.params),
+      ),
     ).toHaveLength(2);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -4059,6 +4065,7 @@ describe("runCodexAppServerAttempt", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -4083,6 +4090,7 @@ describe("runCodexAppServerAttempt", () => {
       "configRequirements/read",
       "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
@@ -4144,7 +4152,9 @@ describe("runCodexAppServerAttempt", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "thread/inject_items",
       "turn/start",
+      "thread/inject_items",
       "turn/start",
     ]);
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
@@ -4217,6 +4227,7 @@ describe("runCodexAppServerAttempt", () => {
       "configRequirements/read",
       "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "thread/inject_items",
       "turn/start",
     ]);
@@ -5124,6 +5135,7 @@ describe("runCodexAppServerAttempt", () => {
         "thread/read",
         "thread/resume",
         "thread/inject_items",
+        "thread/inject_items",
         "turn/start",
       ],
     ]);
@@ -5786,36 +5798,18 @@ describe("saved assistant occurrence settlement", () => {
   );
 });
 
-async function startAttempt(
-  requestImpl?: Parameters<typeof createStartedThreadHarness>[0],
-  options?: Parameters<typeof runCodexAppServerAttempt>[1],
-) {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout"],
-    shouldAdvanceTime: false,
-  });
-  const turnAccepted = createDeferred<void>();
-  const params = createTestParams();
-  params.onExecutionPhase = ({ phase }) => {
-    if (phase === "turn_accepted") {
-      turnAccepted.resolve();
-    }
-  };
-  const harness = createStartedThreadHarness(requestImpl);
-  const run = runCodexAppServerAttempt(params, options);
-  await Promise.race([
-    turnAccepted.promise,
-    run.then(() => {
-      throw new Error("Codex attempt ended before turn acceptance");
-    }),
-  ]);
-  return { harness, run };
+function isUserHistoryInjection(params: unknown): boolean {
+  return (
+    isJsonObject(params) &&
+    Array.isArray(params.items) &&
+    params.items.some((item) => isJsonObject(item) && item.role === "user")
+  );
 }
 
 describe("runCodexAppServerAttempt", () => {
   it.each([true])("continues after bounded plan restoration (failure: %s)", async (fails) => {
-    const { harness, run } = await startAttempt(async (method) => {
-      if (fails && method === "thread/inject_items") {
+    const { harness, run } = await startAttempt(async (method, input) => {
+      if (fails && method === "thread/inject_items" && isUserHistoryInjection(input)) {
         throw new Error("injected test failure");
       }
       return undefined;
@@ -5839,7 +5833,9 @@ describe("runCodexAppServerAttempt", () => {
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
 
-    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
+    const request = harness.requests.find(
+      (entry) => entry.method === "thread/inject_items" && isUserHistoryInjection(entry.params),
+    );
     const text = (
       request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
     )?.items?.[0]?.content?.[0]?.text;

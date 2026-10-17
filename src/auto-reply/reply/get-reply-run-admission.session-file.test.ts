@@ -117,6 +117,7 @@ function createAdmissionFixture() {
     fullAccessState: { available: false },
     isFirstTurnInSession: false,
     extraSystemPromptParts: [],
+    extraSystemPromptTurnContext: undefined,
     sourceConversationContextByMode: { automatic: "", message_tool_only: "" },
     sourceConversationContextPromptOffset: undefined,
     extraSystemPromptStatic: "",

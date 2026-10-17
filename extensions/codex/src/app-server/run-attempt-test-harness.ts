@@ -29,7 +29,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CodexAppServerClient } from "./client.js";
@@ -583,6 +582,20 @@ export function createStartedThreadHarness(
   }, options);
 }
 
+export async function startAttempt(
+  requestImpl?: Parameters<typeof createStartedThreadHarness>[0],
+  options?: Parameters<typeof runCodexAppServerAttempt>[1],
+) {
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout"],
+    shouldAdvanceTime: false,
+  });
+  const harness = createStartedThreadHarness(requestImpl);
+  const run = runCodexAppServerAttempt(createTestParams(), options);
+  await run.waitForTurnAccepted();
+  return { harness, run };
+}
+
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
@@ -674,7 +687,8 @@ export function setupRunAttemptTestHooks(
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     stubCodexInferenceTransportEnv();
-    tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
+    // Honor the test runner's isolated TMPDIR, not the operator's shared temp root.
+    tempDir = tempDirs.make("openclaw-codex-run-");
     if (options.isolateNativeSkillHome) {
       nativeSkillTestHome ??= tempDir;
       vi.stubEnv("HOME", nativeSkillTestHome);
