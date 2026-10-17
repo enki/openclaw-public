@@ -732,9 +732,8 @@ it("defers newly discovered requester MCP declarations until protected work ends
     release = () => {};
     const idle = runCodexAppServerAttempt({ ...params, runId: "synthetic-mcp-idle" }, options);
     await idle.waitForTurnAccepted();
-    const latestStart = harness.requests
-      .filter((request) => request.method === "thread/start")
-      .at(-1)?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined;
+    const latestStart = harness.requests.findLast((request) => request.method === "thread/start")
+      ?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined;
     expect(
       flattenCodexDynamicToolFunctions(latestStart?.dynamicTools).map((tool) => tool.name),
     ).toContain("fake__show");
