@@ -113,6 +113,31 @@ function captureDiagnostics(publicOnly = false) {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it.each(["required", "optional", "result-required", undefined] as const)(
+    "publishes the admitted reply expectation %s on the active backend",
+    async (terminalReplyExpectation) => {
+      const params = createTestParams();
+      params.terminalReplyExpectation = terminalReplyExpectation;
+      const attachBackend = vi.fn<(backend: ReplyBackend) => void>();
+      params.replyOperation = {
+        attachBackend,
+        detachBackend: vi.fn(),
+      } as unknown as NonNullable<typeof params.replyOperation>;
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      try {
+        expect(attachBackend).toHaveBeenCalledTimes(1);
+        expect(attachBackend.mock.calls[0]?.[0].terminalReplyExpectation).toBe(
+          terminalReplyExpectation,
+        );
+      } finally {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      }
+    },
+  );
+
   it("observes each provider response once without changing whole-turn accounting", async () => {
     const { events, find } = captureDiagnostics();
     const harness = createStartedThreadHarness();
