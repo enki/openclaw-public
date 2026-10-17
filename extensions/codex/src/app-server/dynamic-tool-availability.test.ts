@@ -17,41 +17,44 @@ function createCollectorTools(swarm?: false) {
 }
 
 describe("Codex collector availability", () => {
-  it("rejects a declaration changed by final preparation without falling back", async () => {
-    const tools = createCollectorTools();
-    const initial = createCodexDynamicToolBridge({
-      tools,
-      loading: "direct",
-      signal: new AbortController().signal,
-    });
-    const spawn = tools.find((tool) => tool.name === "sessions_spawn")!;
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "effect" }],
-      details: {},
-    }));
-    spawn.execute = execute;
-    const fallback = { ...spawn, execute };
-    const accepted = initial.specs.filter(
-      (spec) => spec.type === "function" && spec.name === spawn.name,
-    );
-    const bridge = createCodexDynamicToolBridge({
-      tools: [spawn],
-      registeredFallbackTools: [fallback],
-      registeredSpecs: accepted,
-      signal: new AbortController().signal,
-    });
-    expect(
-      await bridge.handleToolCall({
-        threadId: "parent",
-        turnId: "turn",
-        callId: "prepared",
-        tool: spawn.name,
-        arguments: { task: "synthetic" },
-      }),
-    ).toMatchObject({ success: false });
-    expect(execute).not.toHaveBeenCalled();
-    expect(bridge.specs).toEqual(accepted);
-  });
+  it.each(["active", "fallback"])(
+    "rejects a %s declaration changed by final preparation",
+    async (source) => {
+      const tools = createCollectorTools();
+      const initial = createCodexDynamicToolBridge({
+        tools,
+        loading: "direct",
+        signal: new AbortController().signal,
+      });
+      const spawn = tools.find((tool) => tool.name === "sessions_spawn")!;
+      const execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "effect" }],
+        details: {},
+      }));
+      spawn.execute = execute;
+      const fallback = { ...spawn, execute };
+      const accepted = initial.specs.filter(
+        (spec) => spec.type === "function" && spec.name === spawn.name,
+      );
+      const bridge = createCodexDynamicToolBridge({
+        tools: source === "active" ? [spawn] : [],
+        registeredFallbackTools: [source === "active" ? fallback : spawn],
+        registeredSpecs: accepted,
+        signal: new AbortController().signal,
+      });
+      expect(
+        await bridge.handleToolCall({
+          threadId: "parent",
+          turnId: "turn",
+          callId: "prepared",
+          tool: spawn.name,
+          arguments: { task: "synthetic" },
+        }),
+      ).toMatchObject({ success: false });
+      expect(execute).not.toHaveBeenCalled();
+      expect(bridge.specs).toEqual(accepted);
+    },
+  );
 
   it.each(["direct", "searchable"] as const)(
     "keeps native catalogs frozen across the default-on upgrade with %s loading",

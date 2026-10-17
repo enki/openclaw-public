@@ -4,25 +4,34 @@ import {
   normalizeHeartbeatToolResponse,
   type AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { Type } from "typebox";
+import { normalizeOpenAIStrictCompatSchema } from "openclaw/plugin-sdk/provider-tools";
 import type { CodexPluginConfig } from "./config.js";
 import type { CodexToolDescriptor } from "./dynamic-tool-catalog.js";
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
-type InactiveCodexHeartbeatResponseDescriptor = Pick<CodexToolDescriptor, "name" | "description">;
-
-const InactiveHeartbeatResponseParameters = Type.Object({}, { additionalProperties: true });
+type InactiveCodexHeartbeatResponseDescriptor = Pick<
+  CodexToolDescriptor,
+  "name" | "description" | "parameters"
+>;
 
 export function resolveInactiveCodexHeartbeatResponseDescriptor(params: {
   registeredTools: readonly CodexToolDescriptor[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
 }): InactiveCodexHeartbeatResponseDescriptor | undefined {
-  const descriptors = params.registeredSpecs
-    ? flattenCodexDynamicToolFunctions(params.registeredSpecs)
-    : params.registeredTools;
-  const descriptor = descriptors.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
-  return descriptor ? { name: descriptor.name, description: descriptor.description } : undefined;
+  if (params.registeredSpecs) {
+    const descriptor = flattenCodexDynamicToolFunctions(params.registeredSpecs).find(
+      (tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME,
+    );
+    return descriptor
+      ? {
+          name: descriptor.name,
+          description: descriptor.description,
+          parameters: descriptor.inputSchema,
+        }
+      : undefined;
+  }
+  return params.registeredTools.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
 }
 
 export function selectInactiveCodexHeartbeatResponseTool(params: {
@@ -42,9 +51,8 @@ export function selectInactiveCodexHeartbeatResponseTool(params: {
     name: descriptor.name,
     label: descriptor.name,
     description: descriptor.description,
-    // The inherited thread declaration remains authoritative. This executor only
-    // needs an object boundary before the shared heartbeat normalizer runs.
-    parameters: InactiveHeartbeatResponseParameters,
+    // The no-op fallback must validate the exact declaration already accepted by Codex.
+    parameters: normalizeOpenAIStrictCompatSchema(descriptor.parameters),
     execute: async (_toolCallId, args) => {
       const response = normalizeHeartbeatToolResponse(args);
       if (!response) {

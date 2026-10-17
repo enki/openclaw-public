@@ -43,13 +43,13 @@ function createBridge(options: Partial<Parameters<typeof createCodexDynamicToolB
 }
 
 function nativeSpec(name: string): CodexDynamicToolSpec {
-  return {
-    type: "function",
-    name,
-    description: "Test tool",
-    // Match the actual normalized declaration, including its empty required list.
-    inputSchema: { type: "object", properties: {}, additionalProperties: true, required: [] },
-  };
+  const [spec] = createBridge({
+    tools: [tool(name)],
+    registeredTools: [tool(name)],
+    loading: "direct",
+  }).specs;
+  ok(spec, "synthetic native declaration was not prepared");
+  return spec;
 }
 
 function heartbeatCall(notify: boolean) {
@@ -219,6 +219,45 @@ describe("inactive Codex heartbeat endpoint", () => {
       expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
       expect(bridge.availableTools.map((entry) => entry.name)).toEqual(["message"]);
     }
+  });
+
+  it("preserves accepted nested schema constraints through the quiet fallback adapter", async () => {
+    const parameters = Type.Object(
+      {
+        outcome: Type.Union([Type.Literal("progress"), Type.Literal("needs_attention")]),
+        notify: Type.Boolean(),
+        summary: Type.String({ minLength: 1 }),
+        context: Type.Object({ source: Type.Literal("synthetic") }),
+      },
+      { additionalProperties: false },
+    );
+    const native = createBridge({
+      tools: [{ ...tool(heartbeatName), parameters }],
+      registeredTools: [{ ...tool(heartbeatName), parameters }],
+      loading: "direct",
+    });
+    const descriptor = resolveDescriptor({ registeredTools: [], registeredSpecs: native.specs });
+    ok(descriptor, "synthetic accepted heartbeat descriptor missing");
+    const fallback = fallbackTool(descriptor);
+    const bridge = createBridge({
+      tools: [],
+      registeredTools: [],
+      registeredSpecs: native.specs,
+      registeredFallbackTools: [fallback],
+    });
+    expect(bridge.specs).toEqual(native.specs);
+    const valid = {
+      ...heartbeatCall(false),
+      arguments: { ...heartbeatCall(false).arguments, context: { source: "synthetic" } },
+    };
+    expectResult(await bridge.handleToolCall(valid), { success: true });
+    const invalid = {
+      ...valid,
+      arguments: { ...valid.arguments, context: { source: "different" } },
+    };
+    const refused = await bridge.handleToolCall(invalid);
+    expectResult(refused, { success: false });
+    expect(refused.executionStarted).toBe(false);
   });
 
   it.each([true, false])("rejects invalid calls with inactive heartbeat=%s", async (inactive) => {
