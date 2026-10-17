@@ -20,7 +20,6 @@ import type {
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
-import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
@@ -122,11 +121,19 @@ type ReplyTurnParticipantInput = Pick<
   "operatorAuthority" | "senderId" | "senderName" | "gatewayUiCommandTarget"
 >;
 
+/** Client discovery can be normalized without depending on queued execution state. */
+export type ReplyToolAuthorityClientDiscovery = Pick<
+  ReplyToolAuthorityOverlay,
+  "operatorAuthority"
+> & {
+  run: Pick<ReplyToolAuthorityOverlay, "clientCaps" | "gatewayUiCommandTarget">;
+};
+
 export type ReplyToolAuthoritySnapshot = Readonly<{
   close?(): void;
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Normalize client discovery only; preserve the complete incoming execution policy. */
-  normalizeIncomingInput?(input: ReplyToolAuthorityInput): ReplyToolAuthorityInput;
+  normalizeIncomingInput?<T extends ReplyToolAuthorityClientDiscovery>(input: T): T;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
   requestedRoute?: ReplyToolAuthorityRoute;
   /** @deprecated Use fingerprintAsync for worker-backed preparation. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -437,10 +444,10 @@ export type ReplyOperation = {
     overlay: ReplyToolAuthorityOverlay,
   ): Promise<string | undefined>;
   /** Retain this owner's client discovery without replacing incoming execution policy. */
-  normalizeIncomingToolAuthorityInput?(
+  normalizeIncomingToolAuthorityInput?<T extends ReplyToolAuthorityClientDiscovery>(
     this: void,
-    input: ReplyToolAuthorityInput,
-  ): ReplyToolAuthorityInput;
+    input: T,
+  ): T;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */
   /** @deprecated Use bindToolAuthorityRouteAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;

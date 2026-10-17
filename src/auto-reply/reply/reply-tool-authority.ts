@@ -43,6 +43,7 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type {
+  ReplyToolAuthorityClientDiscovery,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
@@ -291,10 +292,10 @@ function resolvePreparedReplyToolAuthorityFingerprint(
   );
 }
 
-function normalizeIncomingClientDiscovery(
-  snapshot: ReplyToolAuthorityInput,
-  input: ReplyToolAuthorityInput,
-): ReplyToolAuthorityInput {
+function normalizeIncomingClientDiscovery<T extends ReplyToolAuthorityClientDiscovery>(
+  snapshot: ReplyToolAuthorityClientDiscovery,
+  input: T,
+): T {
   const incoming = { ...input, run: { ...input.run } };
   if (
     incoming.operatorAuthority &&
@@ -535,7 +536,7 @@ export function prepareReplyToolAuthority(
       senderName: snapshot.run.senderName,
       gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
     },
-    normalizeIncomingInput: (input: ReplyToolAuthorityInput) => {
+    normalizeIncomingInput: <T extends ReplyToolAuthorityClientDiscovery>(input: T): T => {
       assertOpen();
       return normalizeIncomingClientDiscovery(snapshot, input);
     },
