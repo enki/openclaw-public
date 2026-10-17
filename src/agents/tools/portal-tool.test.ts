@@ -65,13 +65,16 @@ function recorder(summary: PortalSummary = portal) {
 }
 
 describe("portal tool", () => {
-  it("declares the canonical global portal without constructing a private executor", () => {
+  it("declares the canonical global portal while refusing a non-owner invocation", async () => {
     const recorded = recorder();
     const declarations: CoreToolDeclaration[] = [];
     const tools = createAvailablePortalTools({ senderIsOwner: false }, (declaration) =>
       declarations.push(declaration),
     );
-    expect(tools).toEqual([]);
+    expect(tools).toHaveLength(1);
+    await expect(tools[0]!.execute("open", { action: "open", port: 3000 })).rejects.toThrow(
+      "needs the owner",
+    );
     expect(declarations).toHaveLength(1);
     const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
     expect(declarations[0]).toEqual({
@@ -101,27 +104,13 @@ describe("portal tool", () => {
         }
       },
     };
-    const declarations: CoreToolDeclaration[] = [];
-    const tool = createAvailablePortalTools(
-      {
-        senderIsOwner: false,
-        sessionPortalTarget: target,
-      },
-      (declaration) => declarations.push(declaration),
-    )[0]!;
-    expect(declarations).toHaveLength(1);
-    const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
-    expect(declarations[0]).toEqual({
-      name: owner.name,
-      description: owner.description,
-      parameters: owner.parameters,
-    });
-    expect(declarations[0]!.parameters).toHaveProperty("properties.environmentId");
-    expect(tool.parameters).not.toHaveProperty("properties.environmentId");
-    expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
-    expect(
-      Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),
-    ).toBe(false);
+    const tool = createAvailablePortalTools({
+      senderIsOwner: false,
+      sessionPortalTarget: target,
+    })[0]!;
+    // The session target keeps the host definition so the prompt prefix stays stable;
+    // the bound target refuses host or alternate selection when the call runs.
+    expect(tool.parameters).toEqual(createAvailablePortalTools()[0]!.parameters);
     for (const action of ["open", "list", "close"]) {
       await tool.execute(action, { action, port: 3000, id: "p3000" });
     }

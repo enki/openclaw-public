@@ -1,12 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  createInitializationContext,
-  createTestChatPane,
-  connectPaneTestView,
-} from "./chat-pane.test-support.ts";
-import { createPageState } from "./chat-state-page.ts";
+import { createTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
 import { publishChatRunState } from "./chat-state-render.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
@@ -56,7 +51,10 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: { component: FrameLayout, props: { label: pane.paneLabel, id: pane.paneId } },
+      layout: {
+        component: FrameLayout,
+        props: { label: pane.history.catalogCursor ?? pane.paneLabel, id: pane.paneId },
+      },
     }),
     presentedChanged: () => {},
   });
@@ -73,6 +71,17 @@ async function mountPane(presented = true) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("batches a projected history change with a legacy invalidation into one frame", async () => {
+  const { pane, updates } = await mountPane();
+  await task(() => {
+    pane.history.catalogCursor = "projected history";
+    pane.invalidate();
+  });
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("projected history");
+  expect(updates).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -160,13 +169,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   const { pane } = await mountPane();
-  const state = createPageState(
-    createInitializationContext(),
-    pane.chatState.createRenderLifecycle(),
-    pane,
-  );
-  pane.state = state;
-  pane.chatState.attach(state);
+  const state = pane.state;
   Object.assign(pane, {
     render: () => ({ layout: { component: FrameLayout, props: { stream: state.chatStream } } }),
   });

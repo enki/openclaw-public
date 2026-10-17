@@ -60,7 +60,13 @@ it("projects fresh core declarations without granting private execution", async 
   };
   const owner = await surface(true, [], options);
   const privateTurn = await surface(false, [], options);
-  expect(privateTurn.tools.map((tool) => tool.name)).not.toContain("conversations_send");
+  const conversationSend = privateTurn.tools.find((tool) => tool.name === "conversations_send")!;
+  const deniedSend = await conversationSend.execute("private-send", {
+    sessionKey: "agent:main:synthetic-target",
+    message: "synthetic",
+  });
+  expect(deniedSend.details).toMatchObject({ gated: true });
+  expect(JSON.stringify(deniedSend.content)).toContain("needs the owner's authority");
   const read = privateTurn.hostCapabilities.readCoreToolDeclarations;
   expect(read).toBeTypeOf("function");
   const declarations = read!(privateTurn.tools);
@@ -114,12 +120,15 @@ it("projects fresh core declarations without granting private execution", async 
     "catalogMode",
     "direct-only",
   );
-  expect(privateTurn.tools.map((tool) => tool.name)).not.toContain("portal");
+  const portal = privateTurn.tools.find((tool) => tool.name === "portal")!;
+  const deniedPortal = await portal.execute("private-portal", { action: "list" });
+  expect(deniedPortal.details).toMatchObject({ gated: true });
+  expect(JSON.stringify(deniedPortal.content)).toContain("needs the owner's authority");
   privateTurn.closeHost();
   expect(() => read!(privateTurn.tools)).toThrow(/active|closed/);
 });
 
-it("keeps transcript registration across caller-provenance changes without publishing an executor", async () => {
+it("keeps transcript registration across caller-provenance changes while denying identityless access", async () => {
   const owner = await surface(true, [], { senderId: "synthetic-owner" });
   const internal = await surface(false, [], { senderId: undefined });
   const declaration = (host: Awaited<ReturnType<typeof surface>>) =>
@@ -127,7 +136,10 @@ it("keeps transcript registration across caller-provenance changes without publi
       (tool) => tool.name === "transcripts",
     );
   expect(owner.tools.some((tool) => tool.name === "transcripts")).toBe(true);
-  expect(internal.tools.some((tool) => tool.name === "transcripts")).toBe(false);
+  const transcripts = internal.tools.find((tool) => tool.name === "transcripts")!;
+  await expect(transcripts.execute("private-transcripts", { action: "list" })).rejects.toThrow(
+    "no user or operator identity",
+  );
   expect(declaration(internal)).toEqual(declaration(owner));
   expect(declaration(internal)).toHaveProperty("parameters.properties.action");
   const disabled = await surface(false, [], { config: { transcripts: { enabled: false } } });

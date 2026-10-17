@@ -14,7 +14,7 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import type { DeclaredToolAllowlistContext, ToolPolicyLike } from "./tool-policy.js";
+import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 
 /** Admit each new invocation against published policy without changing an accepted invocation. */
 export function createScheduledMessageInvocationAdmission(params: {
@@ -47,7 +47,6 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   pluginMetadataSnapshot?: Parameters<
     typeof resolveConversationCapabilityProfile
   >[0]["pluginMetadataSnapshot"];
-  ownerOnlyCoreToolPolicy?: ToolPolicyLike;
   catalog: () => {
     tools: AnyAgentTool[];
     declaredToolAllowlist?: DeclaredToolAllowlistContext;
@@ -65,8 +64,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   const filterCatalog = <T extends CoreToolDeclaration>(
     currentProfile: ResolvedConversationCapabilityProfile,
     tools: T[],
-    ownerOnlyCoreToolPolicy: ToolPolicyLike | undefined,
     onFilter?: (event: ToolPolicyFilterEvent<T>) => void,
+    scope: "turn" | "session" = "turn",
   ): T[] => {
     const currentPolicies =
       currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
@@ -85,16 +84,12 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           sandboxPolicy: policies.sandboxPolicy,
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
-          inheritedToolPolicy: policies.inheritedToolPolicy,
+          inheritedToolPolicy:
+            scope === "session" &&
+            currentProfile.policy.requesterPolicySource === "completion-handoff"
+              ? undefined
+              : policies.inheritedToolPolicy,
         },
-        additionalStepsAfterSandbox: [
-          {
-            policy: ownerOnlyCoreToolPolicy,
-            source: { kind: "session" },
-            label: "gateway sender owner-only tools",
-            unavailableCoreToolReason,
-          },
-        ],
         includeRuntimeToolPolicy: true,
         unavailableCoreToolReason,
       }),
@@ -105,17 +100,18 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   const filter = (
     currentProfile = params.capabilityProfile,
     onFilter?: (event: ToolPolicyFilterEvent) => void,
-  ) =>
-    filterCatalog(currentProfile, params.catalog().tools, params.ownerOnlyCoreToolPolicy, onFilter);
+    scope: "turn" | "session" = "turn",
+  ) => filterCatalog(currentProfile, params.catalog().tools, onFilter, scope);
   return {
     filter,
     // Only literal, producer-identified core definitions omit transient owner
-    // selection. Every persistent, inherited, sender and sandbox policy remains.
+    // selection and completion-only replay; persistent sender and resource ceilings remain.
     coreDeclarationSources: (declaredOnly: CoreToolDeclaration[] = []) =>
       filterCatalog<CoreToolDeclaration>(
         params.capabilityProfile,
         [...params.catalog().tools, ...declaredOnly],
         undefined,
+        "session",
       ).filter((tool) => getCoreToolDeclaration(tool) !== undefined),
     admit: createScheduledMessageInvocationAdmission({
       config: params.config,

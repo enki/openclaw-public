@@ -64,6 +64,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
+import { bindBoundedSeed } from "./host-seed.js";
 import { bindHostSkillCatalog } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
@@ -498,6 +499,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
+    ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
     ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive();

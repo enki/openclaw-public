@@ -51,30 +51,33 @@ export function createAvailablePortalTools(
   options: {
     sessionPortalTarget?: SessionPortalToolTarget;
     senderIsOwner?: boolean;
+    /** A worker-placed session only ever reaches its own worker. */
+    workerScoped?: boolean;
   } = {},
   onDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): AnyAgentTool[] {
   const target = options.sessionPortalTarget;
-  // Sender selection can omit the executor or bind it to one worker. Neither
-  // changes this literal catalog; the scoped executor still rejects other hosts.
   const declaration = bindCoreToolDeclaration({
     name: "portal",
-    description: PORTAL_TOOL_DESCRIPTION,
-    parameters: PortalToolSchema,
+    description: options.workerScoped ? SESSION_PORTAL_TOOL_DESCRIPTION : PORTAL_TOOL_DESCRIPTION,
+    parameters: options.workerScoped ? SessionPortalToolSchema : PortalToolSchema,
   });
   onDeclaration?.(declaration);
-  if (options.senderIsOwner === false && !target) {
-    return [];
-  }
+  // One definition for every turn keeps the session's prompt prefix stable; a
+  // non-owner turn is limited to the conversation's worker, or refused.
+  const ownerUnavailable = options.senderIsOwner === false && !target;
   return [
     bindCoreToolDeclaration(
       {
         label: "Portal",
         ...declaration,
-        description: target ? SESSION_PORTAL_TOOL_DESCRIPTION : declaration.description,
-        parameters: target ? SessionPortalToolSchema : declaration.parameters,
         outputSchema: PortalOutputSchema,
         execute: async (_toolCallId, rawArgs) => {
+          if (ownerUnavailable) {
+            throw new ToolInputError(
+              "portal needs the owner's authority, and this turn was not started by the owner",
+            );
+          }
           const params = rawArgs as Record<string, unknown>;
           target?.assertCurrent();
           const action = readToolStringParam(params, "action", { required: true });

@@ -307,6 +307,8 @@ export function createTranscriptsTool(options?: {
   agentId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
+  /** The turn has no human or operator identity to authorize transcript access. */
+  callerUnavailable?: true;
   config?: OpenClawConfig;
   stateDir?: string;
   logger?: TranscriptsLogger;
@@ -323,6 +325,11 @@ export function createTranscriptsTool(options?: {
     ...TRANSCRIPTS_TOOL_DECLARATION,
     label: "Transcripts",
     async execute(_toolCallId, rawParams, signal) {
+      if (options?.callerUnavailable) {
+        throw new Error(
+          "transcripts are unavailable in this turn: it has no user or operator identity to authorize access.",
+        );
+      }
       const ctx = { ...context, config: getConfig?.() };
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       assertTranscriptCaptureEnabled(ctx);

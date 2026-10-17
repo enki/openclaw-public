@@ -65,17 +65,19 @@ export function resolveTranscriptsTool(
   if (config?.transcripts?.enabled === false) {
     return undefined;
   }
-  // Caller provenance selects an executor, not the persistent tool declaration.
   onDeclaration?.(bindCoreToolDeclaration({ ...TRANSCRIPTS_TOOL_DECLARATION }));
+  // Registration depends only on config so every turn of a session offers the
+  // same tool surface; a turn without a caller identity is refused when it runs.
   const caller = resolveTranscriptCaller(options ?? {});
-  if (!caller) {
-    return undefined;
-  }
   return bindCoreToolDeclaration(
     createTranscriptsTool({
       agentId,
-      caller: caller.caller,
-      ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+      ...(caller
+        ? {
+            caller: caller.caller,
+            ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+          }
+        : { callerUnavailable: true }),
       config,
     }),
   );

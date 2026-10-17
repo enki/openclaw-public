@@ -55,11 +55,11 @@ These definitions share the executable core producers' literal metadata and
 cross-tool guidance. They omit transient owner-only catalog selection, while
 retaining configured, sender, sandbox, runtime, and inherited policy restrictions.
 The sessions declaration describes the full management schema unless the sandbox
-requires rename-only access; the executable still exposes and enforces the actual
-sender's actions. Portal likewise publishes its canonical global declaration
-without constructing an owner executor: private turns have no portal executor
-without an attached worker, or retain a session-scoped executor that rejects
-other environments. A declaration is not an execution grant.
+requires rename-only access; the executable still enforces the actual sender's actions. Portal likewise
+publishes the session-stable host or worker declaration. Private turns without
+an attached worker retain a denied tool; attached-worker calls stay bound to
+that worker and reject other environments. A declaration is not an execution
+grant.
 
 Declaration availability still follows the actual core producer's embedded,
 sandbox and model capability restrictions, followed by persistent policy selection.
