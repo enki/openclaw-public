@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PortalCloseResult,
   PortalListResult,
@@ -10,6 +10,7 @@ import {
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
 import type { CoreToolDeclaration } from "../agent-tool-metadata.js";
+import * as gateway from "./in-process-gateway.js";
 import type {
   AgentToolGatewayRequestCaller,
   InProcessGatewayCaller,
@@ -17,6 +18,8 @@ import type {
 import { createAvailablePortalTools } from "./portal-tool.js";
 
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
+
+afterEach(() => vi.restoreAllMocks());
 
 const portal: PortalSummary = {
   id: "p3000",
@@ -56,19 +59,21 @@ function recorder(summary: PortalSummary = portal) {
     requestScopes.push([request.method, request.scopes]);
     return reply(request.method) as T;
   };
-  return { calls, requestScopes, callGateway, callGatewayRequest };
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(callGatewayRequest);
+  return { calls, requestScopes };
 }
 
 describe("portal tool", () => {
   it("declares the canonical global portal without constructing a private executor", () => {
     const recorded = recorder();
     const declarations: CoreToolDeclaration[] = [];
-    const tools = createAvailablePortalTools({ ...recorded, senderIsOwner: false }, (declaration) =>
+    const tools = createAvailablePortalTools({ senderIsOwner: false }, (declaration) =>
       declarations.push(declaration),
     );
     expect(tools).toEqual([]);
     expect(declarations).toHaveLength(1);
-    const owner = createAvailablePortalTools({ ...recorded, senderIsOwner: true })[0]!;
+    const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
     expect(declarations[0]).toEqual({
       name: owner.name,
       description: owner.description,
@@ -99,14 +104,13 @@ describe("portal tool", () => {
     const declarations: CoreToolDeclaration[] = [];
     const tool = createAvailablePortalTools(
       {
-        ...recorded,
         senderIsOwner: false,
         sessionPortalTarget: target,
       },
       (declaration) => declarations.push(declaration),
     )[0]!;
     expect(declarations).toHaveLength(1);
-    const owner = createAvailablePortalTools({ ...recorded, senderIsOwner: true })[0]!;
+    const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
     expect(declarations[0]).toEqual({
       name: owner.name,
       description: owner.description,
@@ -156,10 +160,7 @@ describe("portal tool", () => {
 
   it("maps open, list, and close through the in-process gateway caller", async () => {
     const recorded = recorder();
-    const tool = createAvailablePortalTools({
-      callGateway: recorded.callGateway,
-      callGatewayRequest: recorded.callGatewayRequest,
-    })[0]!;
+    const tool = createAvailablePortalTools()[0]!;
     const opened = await tool.execute("open", {
       action: "open",
       port: 3000,
@@ -198,7 +199,8 @@ describe("portal tool", () => {
       url: `http://127.0.0.1:43123/?${portal.tokenQuery}`,
       exposure: { kind: "loopback-only", browserReachability: "unverified" },
     };
-    const tool = createAvailablePortalTools(recorder(localPortal))[0]!;
+    recorder(localPortal);
+    const tool = createAvailablePortalTools()[0]!;
     for (const action of ["open", "list"]) {
       const result = await tool.execute(action, { action, port: 3000 });
       expect(result.content[0]).toMatchObject({
@@ -211,7 +213,7 @@ describe("portal tool", () => {
 
   it("keeps attached-environment portal operations on the selected machine", async () => {
     const recorded = recorder();
-    const tool = createAvailablePortalTools(recorded)[0]!;
+    const tool = createAvailablePortalTools()[0]!;
     await tool.execute("open", { action: "open", port: 3000, environmentId: "worker:preview" });
     await tool.execute("list", { action: "list", environmentId: "worker:preview" });
     await tool.execute("close", {
@@ -228,10 +230,7 @@ describe("portal tool", () => {
 
   it("rejects action-specific missing and malformed fields before RPC", async () => {
     const recorded = recorder();
-    const tool = createAvailablePortalTools({
-      callGateway: recorded.callGateway,
-      callGatewayRequest: recorded.callGatewayRequest,
-    })[0]!;
+    const tool = createAvailablePortalTools()[0]!;
 
     await expect(tool.execute("open", { action: "open" })).rejects.toThrow("port required");
     await expect(tool.execute("open", { action: "open", port: 3000, path: "app" })).rejects.toThrow(

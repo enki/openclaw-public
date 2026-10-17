@@ -175,6 +175,9 @@ async function createRunParams(fixture: NativeFixture) {
   params.disableTools = false;
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
+  params.onSettledTurn = async (attempt, captureContext) => {
+    attempt.settledTurnFinalizationContext = await captureContext();
+  };
   params.config = { tools: { web: { search: { enabled: false } } } };
   // This fixture calls the attempt directly, so request the host's deferred capture.
   params.onSettledTurn = async (attempt, captureContext) => {

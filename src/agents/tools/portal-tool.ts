@@ -13,12 +13,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayTool,
-  type AgentToolGatewayRequestCaller,
-  type InProcessGatewayCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest, callInProcessGatewayTool } from "./in-process-gateway.js";
 import {
   PORTAL_TOOL_DESCRIPTION,
   SESSION_PORTAL_TOOL_DESCRIPTION,
@@ -54,8 +49,6 @@ export function formatPortalResult(
 
 export function createAvailablePortalTools(
   options: {
-    callGateway?: InProcessGatewayCaller;
-    callGatewayRequest?: AgentToolGatewayRequestCaller;
     sessionPortalTarget?: SessionPortalToolTarget;
     senderIsOwner?: boolean;
   } = {},
@@ -73,8 +66,6 @@ export function createAvailablePortalTools(
   if (options.senderIsOwner === false && !target) {
     return [];
   }
-  const callGateway = options.callGateway ?? callInProcessGatewayTool;
-  const callGatewayRequest = options.callGatewayRequest ?? callAgentToolGatewayRequest;
   return [
     bindCoreToolDeclaration(
       {
@@ -108,8 +99,8 @@ export function createAvailablePortalTools(
             // caller that can mint the same portal through action=open; ask with the
             // write authority this tool already requires so the listing stays usable.
             const result = target
-              ? await callGateway<PortalListResult>("portal.session.list", environment)
-              : await callGatewayRequest<PortalListResult>({
+              ? await callInProcessGatewayTool<PortalListResult>("portal.session.list", environment)
+              : await callAgentToolGatewayRequest<PortalListResult>({
                   method: "portal.list",
                   params: environment,
                   scopes: [PORTAL_URL_SCOPE],
@@ -119,7 +110,7 @@ export function createAvailablePortalTools(
           }
           if (action === "close") {
             const id = readToolStringParam(params, "id", { required: true });
-            const result = await callGateway<PortalCloseResult>(
+            const result = await callInProcessGatewayTool<PortalCloseResult>(
               target ? "portal.session.close" : "portal.close",
               { id, ...environment },
             );
@@ -142,7 +133,7 @@ export function createAvailablePortalTools(
           if (path !== undefined && !path.startsWith("/")) {
             throw new ToolInputError("path must start with /");
           }
-          const portal = await callGateway<PortalSummary>(
+          const portal = await callInProcessGatewayTool<PortalSummary>(
             target ? "portal.session.open" : "portal.open",
             {
               ...environment,
