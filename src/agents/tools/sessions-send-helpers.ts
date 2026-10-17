@@ -5,6 +5,12 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import {
+  logSessionOwnershipLookupFailure,
+  lookupFailedDenialMessage,
+  lookupFailedOperationMessage,
+  sessionOwnershipLookupFailure,
+} from "../../plugin-sdk/session-visibility-internal.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { jsonResult } from "./tool-results.js";
 
@@ -27,6 +33,23 @@ export function sendFailure(
     error,
     ...(sessionKey !== undefined ? { sessionKey } : {}),
   });
+}
+
+export function sendOwnershipLookupFailure(
+  error: unknown,
+  params: { requesterSessionKey: string; restrictToSpawned: boolean },
+) {
+  const failure = sessionOwnershipLookupFailure(error);
+  logSessionOwnershipLookupFailure({
+    requesterSessionKey: params.requesterSessionKey,
+    failure,
+  });
+  return sendFailure(
+    params.restrictToSpawned ? "forbidden" : "error",
+    params.restrictToSpawned
+      ? lookupFailedDenialMessage("send", failure.kind)
+      : lookupFailedOperationMessage("send", failure.kind),
+  );
 }
 
 export function sendReplyResult(

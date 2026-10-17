@@ -12,12 +12,6 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import {
-  logSessionOwnershipLookupFailure,
-  lookupFailedDenialMessage,
-  lookupFailedOperationMessage,
-  sessionOwnershipLookupFailure,
-} from "../../plugin-sdk/session-visibility-internal.js";
-import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -62,7 +56,7 @@ import {
 } from "./sessions-placement-tool-contract.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
-import { sendFailure } from "./sessions-send-helpers.js";
+import { sendFailure, sendOwnershipLookupFailure } from "./sessions-send-helpers.js";
 import {
   finishSessionsSendReply,
   prepareSessionsSendReplyContext,
@@ -209,17 +203,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
           if (!isExpectedSessionLookupMiss(err)) {
-            const failure = sessionOwnershipLookupFailure(err);
-            logSessionOwnershipLookupFailure({
+            return sendOwnershipLookupFailure(err, {
               requesterSessionKey: effectiveRequesterKey,
-              failure,
+              restrictToSpawned,
             });
-            return sendFailure(
-              restrictToSpawned ? "forbidden" : "error",
-              restrictToSpawned
-                ? lookupFailedDenialMessage("send", failure.kind)
-                : lookupFailedOperationMessage("send", failure.kind),
-            );
           }
         }
 
@@ -585,7 +572,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               sessionKey: resolvedKey,
               idempotencyKey,
               deliver: false,
-              sourceReplyDeliveryMode: "message_tool_only" as const,
+              // Native children return through their completion owner, without a message tool.
+              sourceReplyDeliveryMode:
+                targetIsSubagent && !targetAcpMeta
+                  ? ("automatic" as const)
+                  : ("message_tool_only" as const),
               channel: INTERNAL_MESSAGE_CHANNEL,
               lane: resolveNestedAgentLaneForSession(resolvedKey),
               inputProvenance,

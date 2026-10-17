@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -32,6 +33,7 @@ const workerKey = "agent:worker:main";
 const workerSessionId = "91ee481c-f60c-42bc-a238-2fb0306e4f55";
 const nativeChildKey = "agent:worker:subagent:owned-child";
 const acpChildKey = "agent:worker:acp:owned-child";
+const otherChildKey = "agent:worker:subagent:other-child";
 const replyText = "Result from the dispatched run only";
 const runId = "send-policy-run";
 const sessions = [
@@ -46,6 +48,12 @@ const sessions = [
     sessionId: "native-child-session",
     label: "native-child",
     spawnedBy: requesterKey,
+  },
+  {
+    key: otherChildKey,
+    agentId: "worker",
+    sessionId: "other-child-session",
+    spawnedBy: "agent:other:main",
   },
   {
     key: acpChildKey,
@@ -139,6 +147,21 @@ describe("sessions_send directed policy at the tool boundary", () => {
         },
       );
     }
+  });
+
+  beforeAll(() => {
+    seedCanonicalAcpSessionMeta({
+      sessionKey: acpChildKey,
+      sessionId: "acp-child-session",
+      meta: {
+        backend: "acpx",
+        agent: "synthetic",
+        runtimeSessionName: "acp-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
   });
 
   beforeEach(() => {
@@ -359,6 +382,31 @@ describe("sessions_send directed policy at the tool boundary", () => {
       // The identical target and outbound edge work without the sandbox ceiling.
       const allowed = await send(config, { sessionKey: workerKey }, { agentSessionKey });
       expect(allowed.details).toMatchObject({ status: "ok", reply: replyText });
+    },
+  );
+
+  it.each([
+    ["owned native child", nativeChildKey, "automatic", true],
+    ["another parent's native child", otherChildKey, "automatic", false],
+    ["ordinary peer", workerKey, "message_tool_only", true],
+    ["ACP child", acpChildKey, "message_tool_only", true],
+  ] as const)(
+    "retains the result path for a fresh input to %s",
+    async (_name, sessionKey, mode, allowed) => {
+      const result = await send(configFor({ visibility: "all" }), { sessionKey });
+      if (!allowed) {
+        expect(result.details).toMatchObject({ status: "forbidden" });
+        expectNoDispatch();
+        return;
+      }
+      expect(result.details).toMatchObject({ status: "ok", reply: replyText });
+      const request = callGateway.mock.calls.find(([call]) => call.method === "agent")?.[0];
+      expect(request?.params).toMatchObject({
+        sessionKey,
+        deliver: false,
+        sourceReplyDeliveryMode: mode,
+      });
+      expect(request?.params).not.toHaveProperty("disableMessageTool", false);
     },
   );
 

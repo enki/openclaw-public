@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
+  MessageInjectionTargetUnavailableError,
   MessageInjectionWithdrawnError,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
@@ -513,6 +514,19 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
       sourcePreparation,
     );
   } catch (error) {
+    if (error instanceof MessageInjectionTargetUnavailableError) {
+      // Only a still-authorized source may fall back after its captured target ends.
+      try {
+        sourcePreparation?.assertCurrent();
+        options?.assertCurrent?.();
+        if (canInject && !canInject()) {
+          throw new MessageInjectionAuthorityError();
+        }
+      } catch {
+        return createQueueFailureOutcome(sessionId, "tool_authority_mismatch");
+      }
+      return createQueueFailureOutcome(sessionId, "not_streaming");
+    }
     if (error instanceof MessageInjectionAuthorityError) {
       return createQueueFailureOutcome(sessionId, "tool_authority_mismatch");
     }

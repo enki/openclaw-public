@@ -119,7 +119,7 @@ type SessionsSendDeliveryParams = {
     message: string;
     agentId: string;
     inputProvenance: InputProvenance;
-    sourceReplyDeliveryMode: "message_tool_only";
+    sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   };
   sessionKey: string;
   sessionStoreTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;

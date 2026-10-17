@@ -1,6 +1,7 @@
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import {
   createMessageInjectionAuthority,
+  MessageInjectionTargetUnavailableError,
   enqueueMessageInjection,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import {
@@ -251,15 +252,27 @@ export function createEmbeddedMessageInjectionQueue(consume: EmbeddedInjectionTa
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
     const runId = handle?.runId;
-    const assertCurrent = createMessageInjectionAuthority(() => {
+    const assertAuthority = createMessageInjectionAuthority(() => {
       registration?.toolAuthority?.assertActive();
-      return (
-        ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
-        (!handle ||
-          (ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
-            handle.runId === runId))
-      );
+      return ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle;
     });
+    const assertCurrent = () => {
+      // A finished target can remain registered while its authority is closing.
+      // Losing that exact target before admission is not a caller-policy refusal.
+      if (
+        handle &&
+        (ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+          ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) !== registration ||
+          handle.runId !== runId ||
+          handle.isStopped?.() === true ||
+          handle.isAborted?.() === true)
+      ) {
+        throw new MessageInjectionTargetUnavailableError(
+          "Embedded message target is no longer available",
+        );
+      }
+      assertAuthority();
+    };
     const admitted = (release: () => void) =>
       consume(sessionId, text, options, canInject, sourcePreparation, release, assertCurrent);
     return handle ? enqueueMessageInjection(handle, admitted) : admitted(() => {});

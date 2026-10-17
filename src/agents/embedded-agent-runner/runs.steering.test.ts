@@ -17,6 +17,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
+import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
@@ -76,6 +77,74 @@ afterEach(() => {
 });
 
 describe("embedded-agent active-run steering", () => {
+  it.each(["stopped", "replaced", "caller-revoked", "receiver-revoked"] as const)(
+    "classifies a receiver changing while input waits for FIFO admission: %s",
+    async (change) => {
+      const entered = createDeferredCore(),
+        release = createDeferredCore();
+      let receiverCurrent = true,
+        callerCurrent = true,
+        stopped = false;
+      const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async () => {});
+      const handle = createEmbeddedRunHandle({ runId: "receiver", isStopped: () => stopped });
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => !stopped,
+        queueMessage: async (text, options, assertCurrent) => {
+          assertCurrent();
+          await queueMessage(text, options);
+        },
+      };
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "reply",
+            project: () => "authority",
+            projectAsync: async () => "authority",
+            assertActive: () => {
+              if (!receiverCurrent) {
+                throw new Error("receiver authority closed");
+              }
+            },
+          }),
+        },
+        () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
+      );
+      const first = queueGuarded(sessionId, "first", undefined, () => true, {
+        assertCurrent: () => {},
+        prepareCurrent: async () => {},
+        prepareMessage: async () => {
+          entered.resolve();
+          await release.promise;
+          return "first";
+        },
+      });
+      await entered.promise;
+      const second = queueGuarded(sessionId, "second", undefined, () => callerCurrent);
+      if (change === "replaced") {
+        setActiveEmbeddedRun(sessionId, createEmbeddedRunHandle({ runId: "replacement" }));
+      } else if (change !== "receiver-revoked") {
+        stopped = true;
+      }
+      receiverCurrent = false;
+      if (change === "caller-revoked") {
+        callerCurrent = false;
+      }
+      release.resolve();
+      await first;
+      await expect(second).resolves.toMatchObject({
+        queued: false,
+        reason:
+          change === "caller-revoked" || change === "receiver-revoked"
+            ? "tool_authority_mismatch"
+            : "not_streaming",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps V1 compatibility and refuses guarded injection", async () => {
     const queueMessage = vi.fn(asyncNoop),
       claim = vi.fn(async () => true);
