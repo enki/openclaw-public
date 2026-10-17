@@ -685,6 +685,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    privateCompletion: params.privateCompletion,
     ...continuationRetryCount.capability,
   };
   // Explicit attempt projection must retain the original admitted source across recovery run IDs.
