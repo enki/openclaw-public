@@ -204,11 +204,16 @@ it.each(["HTTP", "WebSocket"] as const)(
       if (server && wss) {
         wss.on("connection", (upstream) => {
           upstream.on("message", (bytes) => {
-            forwarded(JSON.parse(bytes.toString()));
+            if (!Buffer.isBuffer(bytes)) {
+              throw new Error("fixture expected an uncompressed Node WebSocket buffer");
+            }
+            forwarded(JSON.parse(bytes.toString("utf8")));
             upstream.send(final);
           });
         });
-        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
         const address = server.address();
         if (!address || typeof address === "string") {
           throw new Error("fixture did not listen");
@@ -244,10 +249,14 @@ it.each(["HTTP", "WebSocket"] as const)(
         upstream.terminate();
       }
       if (wss) {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
       if (server) {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     }
   },
