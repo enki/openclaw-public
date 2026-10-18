@@ -229,6 +229,8 @@ export type ReplyBackendHandle = {
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly terminalReplyExpectation?: ReplyExpectation;
+  /** The sink records a human's reply obligation atomically with accepted steering. */
+  readonly supportsUserReplyPromotion?: boolean;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;

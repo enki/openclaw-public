@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
-import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
+import {
+  getAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -432,6 +435,28 @@ function prepareStream(
     );
   };
   const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
+  const instance = attempt.admittedRunContext?.operationalRunInstance;
+  const runContext = getAgentRunContext(attempt.runId);
+  const supportsUserReplyPromotion =
+    instance !== undefined &&
+    runContext?.delegatedAuthority?.operationalRunInstance === instance &&
+    !(runContext.isControlUiVisible === false && runContext.projectSessionMessages === false);
+  const recordUserReply = (options: EmbeddedAgentQueueMessageOptions | undefined) => {
+    if (!options?.isInboundUserMessage || options.terminalReplyExpectation === "optional") {
+      return;
+    }
+    if (!supportsUserReplyPromotion || getAgentRunContext(attempt.runId) !== runContext) {
+      throw new Error("Accepted user input lost its reply owner");
+    }
+    runContext.acceptedUserReply = {
+      operationalRunInstance: instance,
+      expectation:
+        options.terminalReplyExpectation === "result-required" ||
+        runContext.acceptedUserReply?.expectation === "result-required"
+          ? "result-required"
+          : "required",
+    };
+  };
   type InputAuthority = NonNullable<
     Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
   >;
@@ -478,6 +503,7 @@ function prepareStream(
         canInjectMessage,
         questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
         prepareCurrent,
+        supportsUserReplyPromotion ? () => recordUserReply(options) : undefined,
       );
     } finally {
       activeQueueAdmissions--;
@@ -496,7 +522,12 @@ function prepareStream(
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
       questionAuthority(assertCurrent, authorityKind, preparation),
-    );
+    ).then((accepted) => {
+      if (accepted && supportsUserReplyPromotion) {
+        recordUserReply(options);
+      }
+      return accepted;
+    });
   const cancelPendingUserInput = (
     resolvedBy: string,
     assertCurrent?: () => void,
@@ -578,7 +609,10 @@ function prepareStream(
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-    terminalReplyExpectation: resolveReplyExpectation(attempt),
+    get terminalReplyExpectation() {
+      return resolveReplyExpectation(attempt);
+    },
+    supportsUserReplyPromotion,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     recoverStalledModelCall: recoverStalledModelCall
       ? () => {

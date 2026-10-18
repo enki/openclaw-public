@@ -55,6 +55,7 @@ export function resolveReplyBackendQueueMessageMismatch(
     ReplyBackendHandle,
     | "sourceReplyDeliveryMode"
     | "terminalReplyExpectation"
+    | "supportsUserReplyPromotion"
     | "supportsQueueMessageImages"
     | "taskSuggestionDeliveryMode"
     | "toolAuthorityFingerprint"
@@ -80,7 +81,12 @@ export function resolveReplyBackendQueueMessageMismatch(
   }
   if (
     options?.terminalReplyExpectation !== undefined &&
-    options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required")
+    options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required") &&
+    !(
+      options.isInboundUserMessage === true &&
+      options.terminalReplyExpectation !== "optional" &&
+      backend.supportsUserReplyPromotion === true
+    )
   ) {
     return "reply_expectation_mismatch";
   }

@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+} from "../../../auto-reply/reply/reply-run-registry.js";
 import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import {
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import type { Context } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
@@ -12,6 +19,7 @@ import {
 } from "../../admitted-run-context.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
@@ -20,9 +28,11 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { captureDirectEmbeddedMessageInjectionTarget } from "../message-injection-target.js";
 import { ACTIVE_EMBEDDED_RUNS, ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../run-state.js";
 
 type QuestionDispatcher = Extract<
@@ -98,6 +108,135 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
   });
+
+  it.each(["required", "result-required", "hidden", "closed", "wrong-authority"] as const)(
+    "adopts the human reply obligation only with real session acceptance: %s",
+    async (scenario) => {
+      const runId = `human-reply-${scenario}`;
+      const sessionId = `session-${runId}`;
+      const sessionKey = "agent:main:synthetic-human-reply";
+      const admission = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
+          agentId: "main",
+          runId,
+          ingress: { kind: "system", state: "present", boundary: "reply-promotion-test" },
+        },
+      });
+      try {
+        const admittedRunContext = await admission.admit("embedded", "reply-promotion-test");
+        registerAgentRunContext(runId, {
+          isControlUiVisible: scenario !== "hidden",
+          projectSessionMessages: scenario !== "hidden",
+        });
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          {
+            runId,
+            sessionId,
+            sessionKey,
+            agentId: "main",
+            config: {},
+            provider: "test-provider",
+            modelId: "test-model",
+            workspaceDir: "/synthetic-workspace",
+            sessionFile: sessionKey,
+          },
+          undefined,
+          async (preparedAttempt) => {
+            const { session } = await createTestSession();
+            const firstRequest = createDeferredCore();
+            const held = holdAssistantResponse("Synthetic completion draft.");
+            const requests: Context[] = [];
+            streamMocks.streamSimple.mockImplementation((model, context: Context) => {
+              requests.push(context);
+              if (requests.length === 1) {
+                firstRequest.resolve();
+                return held.response;
+              }
+              return createAssistantResultStream(createAssistant(model, "Synthetic human answer."));
+            });
+            const attempt = {
+              ...preparedAttempt,
+              admittedRunContext,
+              terminalReplyExpectation: "optional" as const,
+            };
+            const prepared = prepareCatalogExecutor({ activeSession: session, attempt });
+            const target = captureDirectEmbeddedMessageInjectionTarget(sessionKey, () => true);
+            expect(target).toBeDefined();
+            const prompt = session.prompt("Process the synthetic completion.");
+            try {
+              await firstRequest.promise;
+              if (scenario === "closed") {
+                prepared.stopAcceptingSteerMessages();
+              }
+              const expectation = scenario === "result-required" ? "result-required" : "required";
+              const injection = await beginReplyMessageInjectionTarget(
+                target!,
+                "Answer this human correction.",
+                {
+                  isInboundUserMessage: true,
+                  // This control is ordinary steering, not a hidden question answer.
+                  ...(scenario === "hidden" ? { allowPendingUserInputAnswer: false as const } : {}),
+                  terminalReplyExpectation: expectation,
+                  toolAuthorityFingerprint:
+                    scenario === "wrong-authority"
+                      ? "different-authority"
+                      : preparedAttempt.toolAuthorityFingerprint,
+                  waitForTranscriptCommit: true,
+                  assertCurrent: () => {},
+                },
+              );
+              const accepted = scenario === "required" || scenario === "result-required";
+              expect(await injection.acceptance).toBe(accepted);
+              // A copied retry must read the logical run's accepted input, not its old policy.
+              expect(resolveReplyExpectation({ ...attempt })).toBe(
+                accepted ? expectation : "optional",
+              );
+              expect(prepared.queueHandle.terminalReplyExpectation).toBe(
+                accepted ? expectation : "optional",
+              );
+              held.release();
+              const outcome = await injection.outcome;
+              expect(outcome).toMatchObject(
+                accepted
+                  ? { status: "accepted" }
+                  : {
+                      status: "rejected",
+                      reason:
+                        scenario === "hidden"
+                          ? "input_visibility_mismatch"
+                          : scenario === "closed"
+                            ? "no_active_run"
+                            : "tool_authority_mismatch",
+                    },
+              );
+              await prompt;
+              expect(requests).toHaveLength(accepted ? 2 : 1);
+              if (accepted) {
+                expect(JSON.stringify(requests[1]?.messages)).toContain(
+                  "Answer this human correction.",
+                );
+                expect(session.messages.at(-1)).toMatchObject({
+                  role: "assistant",
+                  content: [{ type: "text", text: "Synthetic human answer." }],
+                });
+              }
+              expect(session.getSteeringMessages()).toEqual([]);
+            } finally {
+              held.release();
+              await prompt;
+              prepared.subscription.unsubscribe();
+            }
+          },
+        );
+      } finally {
+        admission.close();
+        clearAgentRunContext(runId);
+      }
+    },
+  );
 
   it.each([
     ["replacement", "steering"],

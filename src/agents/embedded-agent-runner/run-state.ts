@@ -82,6 +82,7 @@ export type EmbeddedAgentQueueHandle = {
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   terminalReplyExpectation?: ReplyExpectation;
+  supportsUserReplyPromotion?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
 

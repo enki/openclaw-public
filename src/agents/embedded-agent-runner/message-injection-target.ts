@@ -106,6 +106,9 @@ export function captureDirectEmbeddedMessageInjectionTarget(
   }
   const backend: ReplyBackendHandle = {
     ...handle,
+    get terminalReplyExpectation() {
+      return handle.terminalReplyExpectation;
+    },
     kind: "embedded",
     cancel: (reason) =>
       handle.cancel
@@ -188,7 +191,7 @@ export function captureDirectEmbeddedMessageInjectionTarget(
                   terminalReplyExpectation:
                     backend.terminalReplyExpectation === "result-required"
                       ? "result-required"
-                      : "required",
+                      : (params.options.terminalReplyExpectation ?? "required"),
                 }
               : params.options,
         });
