@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,9 +13,10 @@ import {
   childTurnCompletedNotification,
   createClient,
   createRuntime,
+  directSpawnItem,
   nativeCompletionNotification,
-  notifyChildStarted,
   registerParent,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
@@ -141,6 +143,20 @@ describe("native completion settlement", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const client = createClient();
       const runtime = createRuntime();
+      const retainCustody = (): AgentHarnessCompletionCustody => {
+        const lifetime = new AbortController();
+        return {
+          signal: lifetime.signal,
+          isCurrent: () => !lifetime.signal.aborted,
+          retain: () => {
+            lifetime.signal.throwIfAborted();
+            return retainCustody();
+          },
+          settleExecution: () => {},
+          release: () => lifetime.abort(),
+        };
+      };
+      runtime.captureAgentHarnessCompletionCustody.mockImplementation(async () => retainCustody());
       const entered = createDeferred<void>();
       const delivery = createDeferred<{ delivered: false; path: "none" }>();
       runtime.deliverAgentHarnessCompletion.mockImplementationOnce(async () => {
@@ -159,13 +175,22 @@ describe("native completion settlement", () => {
       let retirement: Promise<void> | undefined;
       try {
         parent.bindTurn("parent-turn");
-        await notifyChildStarted(client);
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        await client.notify(turnStartedNotification("child-turn", { threadId: "child-thread" }));
         await parent.unregister();
         completion = client.notify(completedChild());
         await entered.promise;
-        expect(releasePin).not.toHaveBeenCalled();
-        const canAdmit =
-          runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].isSourceSessionAdmissionAllowed;
+        expect(releasePin).toHaveBeenCalledOnce();
+        const acceptedDelivery = runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0];
+        const canAdmit = acceptedDelivery?.isSourceSessionAdmissionAllowed;
+        expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
         expect(canAdmit?.()).toBe(true);
         if (change === "retirement") {
           retirement = monitor.retireParent("parent-thread");
@@ -179,21 +204,24 @@ describe("native completion settlement", () => {
               result,
             }),
           );
-          // A receipt cannot release custody still owned by the accepted delivery.
-          expect(releasePin).not.toHaveBeenCalled();
+          // Execution protection has ended, but the accepted delivery still owns its result.
+          expect(releasePin).toHaveBeenCalledOnce();
+          expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
         }
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
         await retirement;
         expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
         if (change === "retired-turn-receipt") {
-          expect(releasePin).not.toHaveBeenCalled();
+          expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
+          expect(releasePin).toHaveBeenCalledOnce();
           expect(vi.getTimerCount()).toBe(1);
           await observer?.unregister();
           await vi.advanceTimersByTimeAsync(10);
           expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
         }
         expect(releasePin).toHaveBeenCalledOnce();
+        expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(false);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         delivery.resolve({ delivered: false, path: "none" });
