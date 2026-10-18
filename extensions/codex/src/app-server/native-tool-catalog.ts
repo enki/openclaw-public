@@ -3,7 +3,10 @@ import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import { readCodexClientSessionMeta } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  buildCodexAppServerRuntimeFingerprint,
+} from "./plugin-app-cache-key.js";
 import { isJsonObject, type CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import {
@@ -15,7 +18,7 @@ import { parseCodexToolDeclarations } from "./tool-declarations.js";
 
 export function hasCodexNativeToolCatalog(
   binding: CodexAppServerThreadBinding | undefined,
-): binding is CodexAppServerThreadBinding {
+): binding is CodexAppServerThreadBinding & { connectionScope: "supervision" } {
   return binding?.connectionScope === "supervision" && !binding.pendingSupervisionBranch;
 }
 
@@ -58,7 +61,16 @@ export async function loadCodexNativeToolCatalog(params: {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
   const home = resolveCodexAppServerLocalHomeDir(appServer.start, agentDir);
-  const actualHome = client.getRuntimeIdentity()?.codexHome;
+  const runtimeIdentity = client.getRuntimeIdentity();
+  const actualHome = runtimeIdentity?.codexHome;
+  const runtimeFingerprint =
+    binding.connectionScope === "supervision"
+      ? buildCodexAppServerConnectionFingerprint(appServer, agentDir)
+      : buildCodexAppServerRuntimeFingerprint({
+          appServer,
+          appServerVersion: client.getServerVersion(),
+          runtimeIdentity,
+        });
   if (
     binding.pendingSupervisionBranch ||
     !binding.dynamicToolsFingerprint ||
@@ -66,8 +78,7 @@ export async function loadCodexNativeToolCatalog(params: {
     appServer.remoteWorkspaceRoot ||
     !actualHome ||
     path.resolve(actualHome) !== path.resolve(home) ||
-    binding.appServerRuntimeFingerprint !==
-      buildCodexAppServerConnectionFingerprint(appServer, agentDir)
+    binding.appServerRuntimeFingerprint !== runtimeFingerprint
   ) {
     throw new Error(
       "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",

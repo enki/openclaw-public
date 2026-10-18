@@ -17,6 +17,102 @@ function createCollectorTools(swarm?: false) {
 }
 
 describe("Codex collector availability", () => {
+  it.each(
+    (["active", "fallback", "split"] as const).flatMap((source) =>
+      [false, true].map((readerChanged) => ({ source, readerChanged })),
+    ),
+  )(
+    "prepares the surviving $source collector cohort (reader changed: $readerChanged)",
+    async ({ source, readerChanged }) => {
+      const accepted = createCodexDynamicToolBridge({
+        tools: createCollectorTools(),
+        signal: new AbortController().signal,
+      }).specs;
+      const acceptedBytes = JSON.stringify(accepted);
+      const current = createCollectorTools();
+      const spawn = current.find((tool) => tool.name === "sessions_spawn")!;
+      const reader = current.find((tool) => tool.name === "agents_wait")!;
+      const execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fresh collector executor" }],
+        details: {},
+      }));
+      spawn.execute = execute;
+      if (readerChanged) {
+        reader.description += " Changed reader contract.";
+      }
+      const bridge = createCodexDynamicToolBridge({
+        tools: source === "active" ? current : source === "split" ? [spawn] : [],
+        registeredFallbackTools:
+          source === "fallback" ? current : source === "split" ? [reader] : [],
+        registeredSpecs: accepted,
+        signal: new AbortController().signal,
+      });
+      const result = await bridge.handleToolCall({
+        threadId: "synthetic-parent",
+        turnId: "synthetic-turn",
+        callId: "surviving-collector",
+        tool: spawn.name,
+        arguments: { task: "Inspect the synthetic collector source." },
+      });
+      expect(result).toMatchObject(
+        readerChanged ? { success: false, executionStarted: false } : { success: true },
+      );
+      expect(execute).toHaveBeenCalledTimes(readerChanged ? 0 : 1);
+      if (readerChanged) {
+        expect(bridge.availableTools).toEqual([]);
+        expect(JSON.stringify(result.contentItems)).toContain("not available for this turn");
+      }
+      expect(bridge.specs).toEqual(accepted);
+      expect(JSON.stringify(accepted)).toBe(acceptedBytes);
+    },
+  );
+
+  it.each(["active", "fallback"] as const)(
+    "rejects a prepared %s schema mutated in place without a description change",
+    async (source) => {
+      const initial = createCodexDynamicToolBridge({
+        tools: createCollectorTools(),
+        signal: new AbortController().signal,
+      });
+      const spawn = initial.availableTools.find((tool) => tool.name === "sessions_spawn")!;
+      const schema = structuredClone(spawn.parameters);
+      const description = spawn.description;
+      // Exercise the real collector preparer with a mutable schema owner and
+      // fixed description; pointer equality cannot attest its finalized schema.
+      Object.defineProperties(spawn, {
+        parameters: {
+          get: () => schema,
+          set: (prepared: typeof schema) => {
+            Object.assign(schema, prepared);
+          },
+        },
+        description: { get: () => description, set: () => {} },
+      });
+      const execute = vi.fn(async () => ({ content: [], details: {} }));
+      spawn.execute = execute;
+      const bridge = createCodexDynamicToolBridge({
+        tools: source === "active" ? [spawn] : [],
+        registeredFallbackTools: source === "fallback" ? [spawn] : [],
+        registeredSpecs: initial.specs,
+        signal: new AbortController().signal,
+      });
+      expect(spawn.parameters).toBe(schema);
+      expect(schema).not.toHaveProperty("properties.collect");
+      expect(spawn.description).toBe(description);
+      await expect(
+        bridge.handleToolCall({
+          threadId: "synthetic-parent",
+          turnId: "synthetic-turn",
+          callId: "mutated-in-place",
+          tool: spawn.name,
+          arguments: { task: "Inspect the synthetic collector source." },
+        }),
+      ).resolves.toMatchObject({ success: false, executionStarted: false });
+      expect(execute).not.toHaveBeenCalled();
+      expect(bridge.specs).toEqual(initial.specs);
+    },
+  );
+
   it.each(["active", "fallback"])(
     "rejects a %s declaration changed by final preparation",
     async (source) => {
