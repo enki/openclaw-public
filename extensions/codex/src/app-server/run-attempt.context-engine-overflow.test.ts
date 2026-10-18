@@ -239,6 +239,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 }),
               ]);
               expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+                "configRequirements/read",
                 "config/read",
                 "configRequirements/read",
                 "thread/read",
@@ -246,6 +247,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 "thread/inject_items",
                 "thread/inject_items",
                 "turn/start",
+                "configRequirements/read",
                 "config/read",
                 "configRequirements/read",
                 "thread/start",
@@ -431,6 +433,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -472,6 +475,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -513,6 +517,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",

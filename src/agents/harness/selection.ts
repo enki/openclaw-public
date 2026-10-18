@@ -10,6 +10,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
@@ -29,6 +30,8 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { buildAgentInternalEventContext } from "../internal-events.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -664,7 +667,22 @@ async function preparePluginHarnessParams(
         ...policies.runtimePolicies,
       ]),
   );
-  return effectiveParams;
+  const fragments = buildAgentInternalEventContext(
+    effectiveParams.internalEvents,
+    effectiveParams.runtimeContextFragments,
+  );
+  // Plugins consume the prepared inbound snapshot. Rebuild from the caller's
+  // context on each attempt so retrying never accumulates completion events.
+  return fragments.length > 0
+    ? {
+        ...effectiveParams,
+        currentInboundContext: appendCurrentInboundContext(
+          effectiveParams.currentInboundContext,
+          fragments,
+          labelRuntimeContextText(projectRuntimeContextFragments(fragments)),
+        ),
+      }
+    : effectiveParams;
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
