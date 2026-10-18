@@ -199,6 +199,7 @@ export async function prepareCodexAttemptContext(
     buildDeveloperInstructions(runtimeParams, {
       // Immutable tool guidance follows the accepted catalog, not per-turn executors.
       dynamicTools: toolBridge.specs,
+      nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),

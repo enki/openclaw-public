@@ -512,9 +512,18 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
           .filter(Boolean)
           .join("\n\n"),
       });
-      expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
-        false,
+      // The turn snapshot is separate from the startup hook policy and discovery notice.
+      const handoffs = harness.requests.filter(
+        (request) => request.method === "thread/inject_items",
       );
+      expect(handoffs).toHaveLength(1);
+      expect(JSON.stringify(handoffs[0]?.params)).toContain(
+        "Current OpenClaw conversation instructions",
+      );
+      expect(JSON.stringify(handoffs[0]?.params)).not.toContain(mcpMocks.staticDiagnosticNotice);
+      if (systemPrompt) {
+        expect(JSON.stringify(handoffs[0]?.params)).not.toContain(systemPrompt);
+      }
       expect(mcpMocks.captureCalls).toHaveLength(1);
       expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
 

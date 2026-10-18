@@ -555,6 +555,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? "direct"
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
+            nativeToolSurfaceEnabled,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

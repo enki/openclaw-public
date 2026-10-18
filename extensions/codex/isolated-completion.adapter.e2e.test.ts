@@ -4,11 +4,9 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createIsolatedCompletionBoundaryFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
-import {
-  resolveTestNodeExecPath,
-  useAutoCleanupTempDirTracker,
-} from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -86,6 +84,10 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
       release = resolve;
     });
     let current = true;
+    const node = resolveNodeRuntimeExecutable();
+    if (!node) {
+      throw new Error("The Codex adapter fixture requires a Node runtime");
+    }
     const harness = createCodexAppServerAgentHarness({
       bindingStore: {
         read: unexpectedSessionBinding,
@@ -105,7 +107,7 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
       },
       pluginConfig: {
         appServer: {
-          command: resolveTestNodeExecPath(),
+          command: node,
           args: [
             path.join(repo, "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs"),
             "app-server",
