@@ -83,6 +83,7 @@ export function activateCodexAttemptTurn(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
+    effectiveWorkspace,
   } = connection;
   const { dynamicToolParams, toolBridge } = attemptTools;
   const {
@@ -337,14 +338,14 @@ export function activateCodexAttemptTurn(
   };
   const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
   const imageContext = {
-    workspaceDir: connection.effectiveWorkspace,
+    workspaceDir: effectiveWorkspace,
     agentWorkspaceDir: params.workspaceDir,
     model: params.model,
     config: params.config,
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId),
+      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId, effectiveWorkspace),
     sandbox:
       connection.sandbox?.enabled && connection.sandbox.fsBridge
         ? { root: connection.sandbox.workspaceDir, bridge: connection.sandbox.fsBridge }

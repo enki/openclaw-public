@@ -244,10 +244,12 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 "thread/read",
                 "thread/resume",
                 "thread/inject_items",
+                "thread/inject_items",
                 "turn/start",
                 "config/read",
                 "configRequirements/read",
                 "thread/start",
+                "thread/inject_items",
                 "turn/start",
               ]);
               await harness.notify({
@@ -434,6 +436,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -472,6 +475,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -512,6 +516,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);

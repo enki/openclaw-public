@@ -563,6 +563,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
+        "thread/inject_items",
         "turn/start",
       ]);
       const inputText = getRequestInputText(harness);
@@ -621,6 +622,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "thread/inject_items",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -684,6 +686,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         "config/read",
         "configRequirements/read",
         "thread/start",
+        "thread/inject_items",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -782,6 +785,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "thread/start",
+        "thread/inject_items",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -1021,7 +1025,11 @@ describe("Codex configured context budget", () => {
       expect(bootstrapCall?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
       expect(getRequestInputText(harness)).toContain(params.prompt);
       expect(getRequestInputText(harness)).toContain("CURRENT_INBOUND_REFERENCE");
-      const history = harness.requests.filter(({ method }) => method === "thread/inject_items");
+      const history = harness.requests.filter(
+        ({ method, params: requestParams }) =>
+          method === "thread/inject_items" &&
+          JSON.stringify(requestParams).includes("PRIOR_BUDGET_CONTEXT"),
+      );
       expect(history).toHaveLength(1);
       expect(JSON.stringify(history[0]?.params)).toContain("PRIOR_BUDGET_CONTEXT");
       expect(getRequestInputText(harness)).not.toContain("PRIOR_BUDGET_CONTEXT");
@@ -1046,6 +1054,10 @@ describe("Codex configured context budget", () => {
     const assembly = assemble.mock.calls[0]?.[0];
     expect(assembly?.tokenBudget).toBe(500_000);
     expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
-    expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
+    const handoffs = harness.requests.filter(({ method }) => method === "thread/inject_items");
+    expect(handoffs).toHaveLength(1);
+    expect(JSON.stringify(handoffs[0]?.params)).toContain(
+      "Current OpenClaw conversation instructions",
+    );
   });
 });

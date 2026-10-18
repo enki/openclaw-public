@@ -55,9 +55,18 @@ function seedParams(mode: "thread_bootstrap" | "per_turn" = "per_turn") {
   return { params, assemble };
 }
 
+function selectedHistoryRequests(requests: RecordedRequest[]) {
+  return requests.filter(
+    ({ method, params }) =>
+      method === "thread/inject_items" &&
+      isJsonObject(params) &&
+      Array.isArray(params.items) &&
+      params.items.some((item) => isJsonObject(item) && item.role === "user"),
+  );
+}
+
 function selectedItems(requests: RecordedRequest[]): JsonValue[] {
-  return requests
-    .filter(({ method }) => method === "thread/inject_items")
+  return selectedHistoryRequests(requests)
     .flatMap(({ params }) =>
       isJsonObject(params) && Array.isArray(params.items) ? params.items : [],
     )
@@ -95,6 +104,13 @@ async function runTurn(
   const turn = requests.find(({ method }) => method === "turn/start");
   expect(turn?.params).toMatchObject({ threadId });
   expect(JSON.stringify(turn?.params)).not.toContain("SELECTED_HISTORY");
+  expect(
+    requests.filter(
+      ({ method, params: requestParams }) =>
+        method === "thread/inject_items" &&
+        JSON.stringify(requestParams).includes("Current OpenClaw conversation instructions"),
+    ),
+  ).toHaveLength(1);
   return requests;
 }
 
@@ -242,7 +258,7 @@ describe("Codex configured assembled-history delivery", () => {
       });
       const replacement = await runTurn(params, harness, "rewrite", "thread-selected-2");
       expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      expect(selectedHistoryRequests(replacement)).toHaveLength(1);
       const text = JSON.stringify(selectedItems(replacement));
       expect(text).toContain("REWRITTEN_SELECTED_HISTORY");
       expect(text).toContain(appended);
@@ -313,7 +329,7 @@ describe("Codex configured assembled-history delivery", () => {
         { persistedThreads: [] },
       );
       const requests = await runTurn(params, retry, "retry", "thread-retry");
-      expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      expect(selectedHistoryRequests(requests)).toHaveLength(1);
       const restored = JSON.stringify(selectedItems(requests));
       expect(restored.split(original)).toHaveLength(2);
       if (ownership === "reused") {
@@ -344,7 +360,7 @@ describe("Codex configured assembled-history delivery", () => {
       });
       const replacement = await runTurn(params, harness, "upgrade", "thread-selected-2");
       expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      expect(selectedHistoryRequests(replacement)).toHaveLength(1);
       expect(JSON.stringify(selectedItems(replacement))).toContain(original);
       const unchanged = await runTurn(params, harness, "after-upgrade", "thread-selected-2");
       expect(unchanged.some(({ method }) => method === "thread/start")).toBe(false);
