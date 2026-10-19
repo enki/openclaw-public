@@ -12,7 +12,6 @@ import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
-  copyAgentToolMetadata,
   type CoreToolDeclaration,
 } from "./agent-tool-metadata.js";
 import {
@@ -53,7 +52,6 @@ import {
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
-import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
@@ -249,6 +247,7 @@ function* assembleOpenClawCodingTools(
           containmentRoot,
           includeBaseCodingTools,
           shellTools: includeShellTools ? "full" : "disabled",
+          scheduledExecTarget,
           ...coreToolPolicy,
           sandbox,
           skillsSnapshot: options?.skillsSnapshot,
@@ -399,13 +398,6 @@ function* assembleOpenClawCodingTools(
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
-  const scheduledCoreTools = scheduledExecTarget
-    ? coreTools.map((tool) =>
-        tool.name === "exec"
-          ? copyAgentToolMetadata(tool, pinExecToolTarget(tool, scheduledExecTarget))
-          : tool,
-      )
-    : coreTools;
   const messageInvocationPolicy = createEmbeddedMessageInvocationPolicy({
     config: options?.config,
     capabilityProfile,
@@ -421,7 +413,7 @@ function* assembleOpenClawCodingTools(
     isAvailable: (): boolean => turnAuthorized({ name: "message" }),
   });
   const assembledTools: AnyAgentTool[] = [
-    ...scheduledCoreTools,
+    ...coreTools,
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
       ? mergeAgentRingZeroTools(
@@ -664,7 +656,14 @@ function* assembleOpenClawCodingTools(
       capabilityProfile,
       tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
-        toolsAllow: finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
+        toolsAllow: [
+          ...finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
+          // Provider-hosted search has no function tool; keep this turn's decision for it.
+          ...(!finalizedTools.some((tool) => tool.name === "web_search") &&
+          isConversationToolAllowed(capabilityProfile, "web_search")
+            ? ["web_search"]
+            : []),
+        ],
       },
     }),
   );

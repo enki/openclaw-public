@@ -35,32 +35,8 @@ import {
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
-import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
-
-/** Shared tool routing for the CLI and embedded command paths. */
-export function projectCommandAttemptToolContext(params: AgentAttemptParams) {
-  return {
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
-    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
-  };
-}
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 

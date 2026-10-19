@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindCoreToolDeclaration } from "./agent-tool-metadata.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -11,6 +12,7 @@ import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-too
 import { createPersonalInstructionsTool } from "./tools/personal-instructions-tool.js";
 import { createPluginsTool } from "./tools/plugins-tool.js";
 import { createPresenceTool } from "./tools/presence-tool.js";
+import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 /** Gateway-owned operations are not standalone embedded-host capabilities. */
 export function createHostedGatewayTools(
@@ -47,18 +49,35 @@ export function createHostedGatewayTools(
 export function createHostedConversationTools(
   options: OpenClawToolsOptions | undefined,
   sessionAgentId: string,
+  sessionConfig: OpenClawConfig | undefined,
 ): AnyAgentTool[] {
   return [
-    createConversationsListTool,
-    createConversationsSendTool,
-    createConversationsTurnTool,
-  ].map((createTool) =>
-    bindCoreToolDeclaration(
-      createTool({
-        ...options,
-        agentId: sessionAgentId,
-        agentSessionId: options?.sessionId,
-      }),
+    ...[createConversationsListTool, createConversationsSendTool, createConversationsTurnTool].map(
+      (createTool) =>
+        bindCoreToolDeclaration(
+          createTool({
+            ...options,
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+          }),
+        ),
     ),
-  );
+    // Keep the in-process caller so materialized agent roots retain their creation stamp.
+    createSessionsSendTool({
+      ...options,
+      requesterTurnRunId: options?.runId,
+      agentId: sessionAgentId,
+      // Match sessions_spawn: spawned children record the durable run
+      // session as spawnedBy, so the parent check must use the same key.
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentSessionId: options?.sessionId,
+      requesterOrigin: {
+        channel: options?.agentChannel,
+        accountId: options?.agentAccountId,
+        to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
+        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+      },
+      config: sessionConfig,
+    }),
+  ];
 }

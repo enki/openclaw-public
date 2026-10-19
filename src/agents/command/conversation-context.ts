@@ -11,8 +11,27 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveWebchatPromptCacheKey } from "../embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
+import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
+
+/** Internal continuations keep the affinity of the persisted webchat conversation. */
+export function resolveCommandConversationPromptCacheKey(
+  params: Pick<
+    AgentAttemptParams,
+    "sessionEntry" | "sessionKey" | "sessionAgentId" | "providerOverride" | "modelOverride"
+  >,
+): string | undefined {
+  return params.sessionEntry?.delivery?.kind === "internal" && params.sessionKey
+    ? resolveWebchatPromptCacheKey({
+        agentId: params.sessionAgentId,
+        provider: params.providerOverride,
+        model: params.modelOverride,
+        sessionKey: params.sessionKey,
+      })
+    : undefined;
+}
 
 /** Reuse conversation guidance without borrowing the originating sender's authority. */
 export async function prepareCommandConversationContext(params: {

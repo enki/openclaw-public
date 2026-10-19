@@ -166,7 +166,6 @@ describe("native completion settlement", () => {
       const releasePin = vi.fn();
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
         recoveryPollDelaysMs: [],
-        completionDeliveryRetryDelaysMs: [10],
         retainParentThread: () => releasePin,
       });
       const parent = await registerParent(monitor);
@@ -185,9 +184,14 @@ describe("native completion settlement", () => {
         });
         await client.notify(turnStartedNotification("child-turn", { threadId: "child-thread" }));
         await parent.unregister();
+        expect(releasePin).not.toHaveBeenCalled();
         completion = client.notify(completedChild());
         await entered.promise;
+        // Terminal work releases execution protection while its result still owns delivery.
         expect(releasePin).toHaveBeenCalledOnce();
+        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ result }),
+        );
         const acceptedDelivery = runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0];
         const canAdmit = acceptedDelivery?.isSourceSessionAdmissionAllowed;
         expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
@@ -198,13 +202,15 @@ describe("native completion settlement", () => {
         } else {
           observer = await registerParent(monitor);
           observer.bindTurn("observer-turn");
+          expect(observer.listPendingChildren()).toMatchObject([{ state: "completing" }]);
           await client.notify(
             nativeCompletionNotification({
               turnId: change === "receipt" ? "observer-turn" : "parent-turn",
               result,
             }),
           );
-          // Execution protection has ended, but the accepted delivery still owns its result.
+          // A receipt cannot revoke admission while its accepted handoff is in flight.
+          expect(canAdmit?.()).toBe(true);
           expect(releasePin).toHaveBeenCalledOnce();
           expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
         }
@@ -215,11 +221,17 @@ describe("native completion settlement", () => {
         if (change === "retired-turn-receipt") {
           expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(true);
           expect(releasePin).toHaveBeenCalledOnce();
+          expect(canAdmit?.()).toBe(true);
+          expect(observer?.listPendingChildren()).toMatchObject([{ state: "completing" }]);
           expect(vi.getTimerCount()).toBe(1);
           await observer?.unregister();
-          await vi.advanceTimersByTimeAsync(10);
+          await vi.advanceTimersByTimeAsync(5_000);
           expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenLastCalledWith(
+            expect.objectContaining({ result }),
+          );
         }
+        expect(canAdmit?.()).toBe(false);
         expect(releasePin).toHaveBeenCalledOnce();
         expect(acceptedDelivery?.completionCustody?.isCurrent()).toBe(false);
         expect(vi.getTimerCount()).toBe(0);

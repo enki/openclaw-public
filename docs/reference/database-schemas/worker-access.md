@@ -290,8 +290,20 @@ receipts. Final-handle closure retires row facts while retaining physical valida
 and owner-published quarantine decisions.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
-Receipt metadata follows retained session scopes rather than all deleted sessions;
-reads of absent keys can still register a scope. Replacement files still require
+Idle receipt metadata has a 1 MiB estimated-byte LRU budget per physical database
+in each isolate. Active completion and Workshop effect scopes pin their shared
+cells and physical admission before asynchronous source preparation, releasing
+both with the effect scope. Pins can exceed the idle budget; release prunes it
+again. Writes and deletion still invalidate pinned receipts. Reads touch local
+recency without a cross-thread handshake. Eviction
+retires shared cells and their published snapshots; old tokens cannot certify a
+cached row, and oversized scopes use a database-wide receipt that invalidates on
+every write without retaining a scope cell. These
+receipts carry freshness, not writer authority; pending writers retain their live
+grants and conservatively invalidate replacement receipts at settlement. Session
+deletion also retires every model-context page partition, including pages from a
+previously longer transcript. Final database closure retires the whole generation.
+Replacement files still require
 admission through the same owner. Schemas, stored data, and update behavior are
 unchanged.
 
@@ -302,6 +314,13 @@ Do not add per-request `data_version` probes, repeated schema checks, or
 read-after-write certification. An owner without complete receipt coverage must
 use its canonical reader until that coverage exists. Other processes route
 writes through the Gateway or hold exclusive ownership while it is stopped.
+
+Remote model catalog reads retain the last worker result, including absence,
+until a committed write to the current or released legacy catalog slots publishes
+a new receipt. Unrelated machine-state writes leave it reusable. The receipt
+exchange carries no catalog payload; retained rows remain local to their selected
+database engine. Maintenance and artifact-preserving inspections read their own
+selected store directly.
 
 Idle maintenance uses the same ownership rule. Secret and device-setup expiry,
 GitHub OAuth inventory, ingress health, placement inventory, and cron history
@@ -2170,8 +2189,9 @@ resets, cold archives, and incompatible writes invalidate its retained facts.
 SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
-archives, and turn mutations retain canonical readers. Idempotency still reads
-the canonical identity because a bounded transcript window cannot prove absence.
+archives, and turn mutations retain canonical readers. A complete resident identity
+index proves a fresh idempotency key is absent without reading SQL. Truncated
+indexes, matching keys, and assistant-body scans retain canonical lookups.
 Source validation, pending-input custody, and final write authority remain with
 their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents

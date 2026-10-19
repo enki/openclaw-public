@@ -3,7 +3,6 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
-import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
@@ -42,7 +41,7 @@ export function createCodexAttemptReplyMediaPreparer(
 }
 
 export async function settleReplyMedia(
-  activeTurn: CodexAttemptActiveTurn,
+  activeTurn: { prepareReplyMedia: ReturnType<typeof createCodexAttemptReplyMediaPreparer> },
   result: EmbeddedRunAttemptResult,
   { state, settlementExpired }: CodexAttemptTurnState,
   signal: AbortSignal,
