@@ -41,10 +41,13 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllowExplicitlyEmpty?: boolean;
+  toolsDeniedAll?: boolean;
   skillWorkshop?: SkillWorkshopToolConstructionContext;
 }): Error | null {
   const toolsIntentionallyDisabled =
-    params.disableTools === true || params.toolsAllowExplicitlyEmpty === true;
+    params.disableTools === true ||
+    params.toolsAllowExplicitlyEmpty === true ||
+    params.toolsDeniedAll === true;
   const sources = toolsIntentionallyDisabled
     ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
     : params.sources;

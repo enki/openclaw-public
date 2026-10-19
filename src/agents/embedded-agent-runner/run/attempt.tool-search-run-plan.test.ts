@@ -37,15 +37,19 @@ async function plan(
     catalogToolCount?: number;
     codeMode?: boolean;
     directory?: boolean;
-    allow?: string[];
+    allow?: string[] | null;
+    config?: OpenClawConfig;
+    clientTools?: typeof clientTools;
   } = {},
 ) {
   const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
+    ...options.config,
     tools: {
       codeMode: options.codeMode ?? false,
       toolSearch: { enabled: !options.codeMode, mode: options.directory ? "directory" : "tools" },
+      ...options.config?.tools,
     },
   };
   const admission = prepareSystemAgentRunAdmission(config, "catalog-plan", "main", "catalog-test");
@@ -73,7 +77,7 @@ async function plan(
         baseUrl: "https://example.test/v1",
       }),
       thinkLevel: "off",
-      toolsAllow: options.allow ?? ["missing_tool"],
+      toolsAllow: options.allow === null ? undefined : (options.allow ?? ["missing_tool"]),
       authProfileStore: { version: 1, profiles: {} },
       authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -151,11 +155,17 @@ async function plan(
         }),
       }),
       preparedToolBase,
-      bundleTools: { clientTools, uncompactedEffectiveTools: uncompactedTools },
+      bundleTools: {
+        clientTools: options.clientTools ?? clientTools,
+        uncompactedEffectiveTools: uncompactedTools,
+      },
       abortSignal: abort.signal,
       executeCodeModeTool: async () => ({ content: [], details: undefined }),
     });
-    return result.toolSearchRunPlan;
+    return {
+      ...result.toolSearchRunPlan,
+      emptyExplicitToolAllowlistError: result.emptyExplicitToolAllowlistError,
+    };
   } finally {
     abort.abort();
     surface.cleanup();
@@ -164,6 +174,38 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it.each([
+    { name: "an explicit allowlist", tools: { allow: ["read"] } },
+    { name: "additive plugin grants", tools: { alsoAllow: ["optional_plugin_tool"] } },
+  ])("allows a deny-all agent to run without tools under $name", async ({ tools }) => {
+    const result = await plan({
+      visibleTools: [],
+      clientTools: [],
+      allow: null,
+      config: {
+        tools,
+        agents: { entries: { main: { tools: { deny: ["*"] } } } },
+      },
+    });
+    expect(result.hasCallableTools).toBe(false);
+    expect(result.visibleAllowedToolNames.size).toBe(0);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
+  });
+
+  it("still rejects a command-time tool request denied by the agent", async () => {
+    const result = await plan({
+      visibleTools: [],
+      clientTools: [],
+      allow: ["read"],
+      config: {
+        tools: { allow: ["read"] },
+        agents: { entries: { main: { tools: { deny: ["*"] } } } },
+      },
+    });
+    expect(result.hasCallableTools).toBe(false);
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("runtime toolsAllow: read");
+  });
+
   it("carries native catalog capabilities without widening direct execution authority", async () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });
