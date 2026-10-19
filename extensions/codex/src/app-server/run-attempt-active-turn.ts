@@ -415,7 +415,8 @@ export function activateCodexAttemptTurn(
       // is recorded only once Codex accepts it, so a rejected steer cannot replay.
       const transcriptItems = items.filter(
         (item) =>
-          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+          (item.isInboundUserReply ?? item.isInboundUserMessage) === true ||
+          item.userTurnTranscriptRecorder !== undefined,
       );
       if (transcriptItems.length === 0) {
         return;
@@ -446,7 +447,7 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
-        if (item.isInboundUserMessage === false) {
+        if ((item.isInboundUserReply ?? item.isInboundUserMessage) === false) {
           continue;
         }
         const recorder = item.userTurnTranscriptRecorder;
@@ -519,8 +520,8 @@ export function activateCodexAttemptTurn(
       unconfirmed = error;
     }
     const recorder =
-      optionsLocal?.isInboundUserMessage === false
-        ? optionsLocal.userTurnTranscriptRecorder
+      (optionsLocal?.isInboundUserReply ?? optionsLocal?.isInboundUserMessage) === false
+        ? optionsLocal?.userTurnTranscriptRecorder
         : undefined;
     if (recorder) {
       recorder.markSentToProvider?.();

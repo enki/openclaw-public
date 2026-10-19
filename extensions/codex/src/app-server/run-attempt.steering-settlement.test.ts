@@ -143,7 +143,7 @@ async function createFixture() {
       closeHost();
     },
     readMessages: () => readTranscriptMessagesByIdentity(params),
-    queue: () =>
+    queue: (options?: Parameters<typeof queueActiveRunMessageForTest>[2]) =>
       queueActiveRunMessageForTest(params.sessionId, steerText, {
         debounceMs: 0,
         isInboundUserMessage: true,
@@ -151,6 +151,7 @@ async function createFixture() {
         userTurnTranscriptRecorder: recorder,
         waitForTranscriptCommit: true,
         onQueueAccepted: accepted,
+        ...options,
       }),
   };
 }
@@ -298,4 +299,48 @@ it("keeps one steering prefix and source through degraded tainted native complet
     __openclaw: { turnTainted: true, settlementWarning: expect.any(Object) },
   });
   expect(resolveActiveEmbeddedRunSessionId(f.target.sessionKey)).toBeUndefined();
+});
+
+it("persists a controller-adapted human steer before native dispatch", async () => {
+  const release = createDeferred<void>();
+  const persist = expectDefined(
+    f.recorder.persistApproved.getMockImplementation(),
+    "recorder persistence",
+  );
+  f.recorder.persistApproved.mockImplementation(async () => {
+    await release.promise;
+    return await persist();
+  });
+  try {
+    expect(
+      f.queue({
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+      }),
+    ).toBe(true);
+    await vi.waitFor(() => expect(f.recorder.persistApproved).toHaveBeenCalledOnce(), fastWait);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(0);
+    expect(f.accepted).not.toHaveBeenCalled();
+    release.resolve();
+    await vi.waitFor(() => expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    expect(f.recorder.hasPersisted()).toBe(true);
+    const steer = expectDefined(
+      f.harness.requests.find((request) => request.method === "turn/steer"),
+      "native steer",
+    );
+    const clientId = expectDefined(
+      isJsonObject(steer.params) && typeof steer.params.clientUserMessageId === "string"
+        ? steer.params.clientUserMessageId
+        : undefined,
+      "native steer correlation",
+    );
+    await f.item({ id: "adapted-human", type: "userMessage", clientId });
+    expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
+    expect(
+      (await f.readMessages()).filter((message) => messageText(message) === steerText),
+    ).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
 });
