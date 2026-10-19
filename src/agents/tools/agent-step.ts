@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
@@ -183,8 +184,12 @@ export async function runAgentStep(params: {
         );
         if ("ok" in result) {
           if (!result.ok) {
-            const details = result.result.details as { error?: string };
-            throw new Error(details.error ?? "Requester result steering failed.");
+            const details = asOptionalRecord(result.result.details);
+            throw new Error(
+              typeof details?.error === "string"
+                ? details.error
+                : "Requester result steering failed.",
+            );
           }
           steered = result.targetDisposition === "steered";
           accepted ||= steered;

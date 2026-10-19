@@ -47,7 +47,8 @@ import {
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 
 const recordParticipant = vi.hoisted(() => vi.fn());
-vi.mock("../../sessions/session-participant-recording.js", () => ({
+vi.mock("../../sessions/session-participant-recording.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-participant-recording.js")>()),
   recordSessionParticipantBestEffort: recordParticipant,
 }));
 
