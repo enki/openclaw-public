@@ -446,7 +446,8 @@ function prepareStream(
     runContext?.delegatedAuthority?.operationalRunInstance === instance &&
     !(runContext.isControlUiVisible === false && runContext.projectSessionMessages === false);
   const recordUserReply = (options: EmbeddedAgentQueueMessageOptions | undefined) => {
-    if (!options?.isInboundUserMessage || options.terminalReplyExpectation === "optional") {
+    const isUserReply = options?.isInboundUserReply ?? options?.isInboundUserMessage;
+    if (!options || !isUserReply || options.terminalReplyExpectation === "optional") {
       return;
     }
     if (!supportsUserReplyPromotion || getAgentRunContext(attempt.runId) !== runContext) {

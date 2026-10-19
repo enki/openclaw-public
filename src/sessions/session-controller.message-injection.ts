@@ -584,6 +584,8 @@ async function beginPreparedReplyMessageInjectionTarget(
   };
   const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
     ...queueOptions,
+    // Preserve the admitted human reply even when it cannot answer the incumbent's question.
+    isInboundUserReply: queueOptions?.isInboundUserMessage === true,
     // Admission above checks the human principal; the runtime must not interpret
     // an authorized status control as an answer to ask_user.
     ...(allowPendingUserInputAnswer === false
