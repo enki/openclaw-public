@@ -387,6 +387,9 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     get toolAuthorityFingerprint() {
       return toolAuthority.toolAuthorityFingerprint;
     },
+    get requesterPrincipalKey() {
+      return toolAuthority.requesterPrincipalKey;
+    },
     get personalToolParticipants() {
       return toolAuthority.personalToolParticipants;
     },
@@ -474,6 +477,10 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
     projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
     normalizeIncomingToolAuthorityInput: toolAuthority.normalizeIncomingToolAuthorityInput,
+    projectRequesterToolAuthorityFingerprint:
+      toolAuthority.projectRequesterToolAuthorityFingerprint,
+    projectRequesterToolAuthorityFingerprintAsync:
+      toolAuthority.projectRequesterToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
@@ -559,21 +566,19 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       recordOperationBackendRunId(operation, handle.runId);
-      owner.attachment = {
-        operation,
-        backend: handle,
-        projectSessionActive:
-          owner.attachment?.operation === operation
-            ? owner.attachment.projectSessionActive
-            : undefined,
-      };
+      const backend = { handle };
+      if (owner.attachment?.operation === operation) {
+        owner.attachment.backend = backend;
+      } else {
+        owner.attachment = { operation, backend };
+      }
       notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
     },
     detachBackend(handle) {
-      if (owner.active === operation && owner.attachment?.backend === handle) {
+      if (owner.active === operation && owner.attachment?.backend?.handle === handle) {
         owner.attachment.backend = undefined;
         if (
           !("handle" in owner.attachment) &&
@@ -633,7 +638,11 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(createAbortError("Reply operation stalled"));
+      abortInternally(
+        Object.assign(createAbortError("Reply operation stalled"), {
+          code: "OPENCLAW_SESSION_WATCHDOG",
+        }),
+      );
       try {
         backend?.cancel("superseded");
       } finally {

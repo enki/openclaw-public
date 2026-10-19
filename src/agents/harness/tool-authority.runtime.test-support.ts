@@ -20,6 +20,7 @@ export const own: ReplyToolAuthorityOverlay = {
   disableTools: false,
   traceAuthorized: false,
   messageProvider: "webchat",
+  senderId: "authority-requester",
 };
 export const attempt = {
   sessionId,
@@ -34,6 +35,7 @@ export const attempt = {
   sandboxSessionKey: sessionKey,
   senderIsOwner: true,
   messageProvider: "webchat",
+  senderId: "authority-requester",
   traceAuthorized: false,
 };
 
