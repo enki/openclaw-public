@@ -30,6 +30,8 @@ queues, and open board and portal documents in memory. A transport interruption
 does not reset those page-local drafts. The connection indicator at the bottom
 left shows the connection state; retained data may be out of date until reconnect.
 
+If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
+
 Gateway actions, including saving edits and approving requests, require a live
 connection. Reconnecting refreshes retained data without automatically replaying
 those actions. Memory Import keeps explicit deselections when refreshing its
@@ -301,6 +303,10 @@ If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
 ## Download files
+
+If the **Files** panel shows a listing error, select **Retry** to load the current
+folder or search again. This keeps the session and query in place; access checks
+still apply, and a failed retry displays its error.
 
 In the **Files** panel, hover over a file or focus its row to reveal **Download file**
 next to Preview and Copy path. The same action is available in the file preview
