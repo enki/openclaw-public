@@ -10,7 +10,20 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { projectForwardedMessages } from "../../gateway/chat-display-projection.history.js";
+import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
+import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
 import type {
   EmbeddedAgentQueueHandle,
   EmbeddedAgentQueueMessageOptions,
@@ -19,7 +32,16 @@ import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { runAgentStep } from "./agent-step.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
+import * as gatewayContinuation from "./in-process-gateway.js";
+import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const recordParticipant = vi.hoisted(() => vi.fn());
@@ -182,16 +204,53 @@ describe("returned peer results", () => {
       await withOpenClawTestState(
         { scenario: "minimal", prepareProfileCatalog: true },
         async () => {
-          setRuntimeConfigSnapshot({});
+          const cfg = {};
+          setRuntimeConfigSnapshot(cfg);
           const sessionKey = "agent:main:dashboard:synthetic-requester";
           const sessionId = "synthetic-requester-session";
           const scope = { agentId: "main", sessionKey, sessionId };
           await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+          const owner = createOperatorClient({
+            profileName: "peer-steering-owner",
+            scopes: ["operator.read", "operator.write"],
+          });
+          const context = createContext();
+          const resolveGatewayContext = () => context;
+          context.resolveGatewayContext = resolveGatewayContext;
+          let connected = true;
+          let receiptCurrent = true;
+          const device = captureGatewayDeviceRevocation(
+            context,
+            { deviceId: "peer-steering-device", role: "operator" },
+            () => connected,
+            undefined,
+            { isCurrent: () => true, subscribe: () => () => {} },
+          );
+          const source = await captureGatewayOperatorRunAuthority({
+            client: owner,
+            context,
+            hasCurrentClientAuthority: device.isCurrent,
+          });
+          const origin = captureRequesterOrigin({
+            sessionKey,
+            operatorProfileId: owner.authenticatedUserProfile?.profileId,
+          });
+          if (!source || !origin) {
+            throw new Error("Expected the real admitted peer requester source");
+          }
+          const entered = createDeferredCore();
+          const finishPeer = createDeferredCore();
+          const forwarded = createDeferredCore();
           const gatewayCalls: CallGatewayOptions[] = [];
           const callGateway = async <T = unknown>(request: CallGatewayOptions): Promise<T> => {
             gatewayCalls.push(request);
             if (request.method === "agent.wait") {
-              return { status: "ok", terminalReply: { disposition: "empty" } } as T;
+              entered.resolve();
+              await finishPeer.promise;
+              return {
+                status: "ok",
+                terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+              } as T;
             }
             return { runId: "synthetic-unwanted-next-turn" } as T;
           };
@@ -214,78 +273,177 @@ describe("returned peer results", () => {
             sourceReplyDeliveryMode: "automatic",
             messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           };
-          setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
+          const admission = prepareAgentRunAdmission({
+            cfg,
+            operationalRunInstance: createOperationalRunInstanceRef(handle.runId!),
+            operatorAuthority: source.authority,
+            facts: {
+              agentId: "main",
+              runId: handle.runId!,
+              ingress: { kind: "system", state: "present", boundary: "peer-steering-test" },
+            },
+          });
           try {
-            await runSessionsSendA2AFlow({
-              callGateway,
-              targetSessionKey: "agent:main:dashboard:synthetic-peer",
-              targetAgentId: "main",
-              displayKey: "synthetic-peer",
-              runId: "synthetic-completed-peer-run",
-              replyTimeoutMs: 1_000,
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              requesterSession: {
-                sessionId: outcome === "replaced" ? "retired-requester-session" : sessionId,
-                ...(outcome === "lifecycle-changed"
-                  ? { lifecycleRevision: "retired-lifecycle" }
-                  : {}),
+            await withPreparedEmbeddedRunToolAuthority(
+              { admittedRunContext: await admission.admit("embedded", "peer-steering-test") },
+              {
+                ...scope,
+                runId: handle.runId!,
+                sessionFile: "/tmp/peer-steering-test.jsonl",
+                workspaceDir: "/tmp/peer-steering-test",
+                config: cfg,
+                provider: "openai",
+                modelId: "gpt-test",
+                requesterOrigin: origin,
               },
-              reply: {
-                status: "ok",
-                replyText: "Synthetic peer result",
-                terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+              undefined,
+              async (prepared) => {
+                handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+                setActiveEmbeddedRun(
+                  sessionId,
+                  handle,
+                  sessionKey,
+                  "/tmp/peer-steering-test.jsonl",
+                  "main",
+                  prepared.replyOperation,
+                );
+                let retained: ReturnType<typeof resolveGatewayToolOperatorSelection> | undefined;
+                const continuation = gatewayContinuation.runWithGatewayToolContinuationContext;
+                const observed = vi
+                  .spyOn(gatewayContinuation, "runWithGatewayToolContinuationContext")
+                  .mockImplementation(
+                    async <T>(
+                      run: () => Promise<T>,
+                      options?: { retainRequester?: true },
+                    ): Promise<T> => {
+                      try {
+                        return await continuation(async () => {
+                          retained = resolveGatewayToolOperatorSelection();
+                          expect(
+                            getGatewayToolCallerIdentity()?.operationalRunInstance,
+                          ).toBeUndefined();
+                          expect(getGatewayToolCallerIdentity()?.receiptAuthority).toBeUndefined();
+                          expect(getGatewayToolCallerIdentity()?.fullPermission).toBeUndefined();
+                          return run();
+                        }, options);
+                      } finally {
+                        forwarded.resolve();
+                      }
+                    },
+                  );
+                try {
+                  await withPluginRuntimeGatewayRequestScope(
+                    {
+                      client: owner,
+                      context,
+                      resolveGatewayContext,
+                      isWebchatConnect: () => false,
+                      hasCurrentClientAuthority: device.isCurrent,
+                    },
+                    () =>
+                      withOperatorToolGatewayAuthority({ scopes: owner.connect.scopes ?? [] }, () =>
+                        withGatewayToolCallerIdentity(
+                          {
+                            agentId: "main",
+                            sessionKey,
+                            requesterOrigin: origin,
+                            operatorAuthority: source.authority,
+                            operationalRunInstance:
+                              createOperationalRunInstanceRef("ended-peer-tool"),
+                            receiptAuthority: () => receiptCurrent,
+                            fullPermission: true,
+                          },
+                          async () => {
+                            await startSessionsSendReplyFlow({
+                              skip: false,
+                              callGateway,
+                              targetSessionKey: "agent:main:dashboard:synthetic-peer",
+                              targetAgentId: "main",
+                              displayKey: "synthetic-peer",
+                              runId: "synthetic-completed-peer-run",
+                              replyTimeoutMs: 1_000,
+                              replyMode: "peer",
+                              requesterSessionKey: sessionKey,
+                              requesterAgentId: "main",
+                              requesterSession: {
+                                sessionId:
+                                  outcome === "replaced" ? "retired-requester-session" : sessionId,
+                                ...(outcome === "lifecycle-changed"
+                                  ? { lifecycleRevision: "retired-lifecycle" }
+                                  : {}),
+                              },
+                            });
+                            await entered.promise;
+                          },
+                        ),
+                      ),
+                  );
+                  // The sender's receipt, invocation and transport end before the peer result arrives.
+                  receiptCurrent = false;
+                  connected = false;
+                  source.release();
+                  device.release();
+                  finishPeer.resolve();
+                  await forwarded.promise;
+                  expect(gatewayCalls.map((call) => call.method)).toEqual(["agent.wait"]);
+                  if (outcome === "replaced" || outcome === "lifecycle-changed") {
+                    expect(queueMessage).not.toHaveBeenCalled();
+                    expect(await loadTranscriptEvents(scope)).toEqual([]);
+                    return;
+                  }
+                  expect(queueMessage).toHaveBeenCalledOnce();
+                  expect(retained?.assertCurrent).toThrow();
+                  expect(queued?.waitForTranscriptCommit).toBe(false);
+                  expect(await loadTranscriptEvents(scope)).toEqual([]);
+                  const recorder = queued?.userTurnTranscriptRecorder;
+                  if (!recorder) {
+                    throw new Error("Receiver lost its admitted input recorder");
+                  }
+                  // The accepting receiver owns this receipt after forwarding custody is released.
+                  const persisted = await recorder.persistApproved();
+                  expect(persisted?.message.provenance).toMatchObject({
+                    kind: "inter_session",
+                    sourceTool: "sessions_send",
+                    sourceSessionKey: "agent:main:dashboard:synthetic-peer",
+                  });
+                  expect(JSON.stringify(persisted?.message.content)).toContain(
+                    "Synthetic peer result",
+                  );
+                  expect(queueMessage.mock.calls[0]?.[0]).toContain(
+                    "This result is delivered once",
+                  );
+                  expect(queueMessage.mock.calls[0]?.[0]).toContain("will not be sent back");
+                  expect(projectForwardedMessages([{ ...persisted?.message }])[0]).toMatchObject({
+                    role: "assistant",
+                    content: "Synthetic peer result",
+                    senderLabel: expect.stringContaining("Forwarded"),
+                    senderSession: { sessionKey: "agent:main:dashboard:synthetic-peer" },
+                  });
+                  expect(persisted?.message.idempotencyKey).toBeTruthy();
+                  queued?.onQueueSettled?.();
+                  expect(
+                    (await loadTranscriptEvents(scope)).filter(
+                      (entry) => isRecord(entry) && entry.type === "message",
+                    ),
+                  ).toHaveLength(1);
+                  expect(gatewayCalls.map((call) => call.method)).toEqual(["agent.wait"]);
+                  if (outcome === "unconfirmed") {
+                    expect(recordParticipant).not.toHaveBeenCalled();
+                  } else {
+                    expect(recordParticipant).toHaveBeenCalledOnce();
+                  }
+                } finally {
+                  observed.mockRestore();
+                  finishPeer.resolve();
+                  queued?.onQueueSettled?.();
+                  clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+                }
               },
-            });
-            expect(gatewayCalls).toEqual([]);
-            if (outcome === "replaced" || outcome === "lifecycle-changed") {
-              expect(queueMessage).not.toHaveBeenCalled();
-              expect(await loadTranscriptEvents(scope)).toEqual([]);
-              return;
-            }
-            expect(queueMessage).toHaveBeenCalledOnce();
-            expect(queued?.waitForTranscriptCommit).toBe(false);
-            // Admission returns while the receiver still owns consumption. The real
-            // transcript recorder must remain usable after the forwarding call ends.
-            expect(await loadTranscriptEvents(scope)).toEqual([]);
-            const recorder = queued?.userTurnTranscriptRecorder;
-            expect(recorder).toBeDefined();
-            if (!recorder) {
-              throw new Error("Receiver lost its admitted input recorder");
-            }
-            const persisted = await recorder.persistApproved();
-            expect(persisted?.message.provenance).toMatchObject({
-              kind: "inter_session",
-              sourceTool: "sessions_send",
-              sourceSessionKey: "agent:main:dashboard:synthetic-peer",
-            });
-            const text = JSON.stringify(persisted?.message.content);
-            expect(text).toContain("Synthetic peer result");
-            expect(queueMessage.mock.calls[0]?.[0]).toContain("This result is delivered once");
-            expect(queueMessage.mock.calls[0]?.[0]).toContain("will not be sent back");
-            expect(persisted).toBeDefined();
-            const projected = projectForwardedMessages([{ ...persisted?.message }]);
-            expect(projected[0]).toMatchObject({
-              role: "assistant",
-              content: "Synthetic peer result",
-              senderLabel: expect.stringContaining("Forwarded"),
-              senderSession: { sessionKey: "agent:main:dashboard:synthetic-peer" },
-            });
-            expect(persisted?.message.idempotencyKey).toBeTruthy();
-            queued?.onQueueSettled?.();
-            const entries = await loadTranscriptEvents(scope);
-            expect(
-              entries.filter((entry) => isRecord(entry) && entry.type === "message"),
-            ).toHaveLength(1);
-            expect(gatewayCalls).toEqual([]);
-            if (outcome === "unconfirmed") {
-              expect(recordParticipant).not.toHaveBeenCalled();
-            } else {
-              expect(recordParticipant).toHaveBeenCalledOnce();
-            }
+            );
           } finally {
-            queued?.onQueueSettled?.();
-            clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+            admission.close();
+            source.release();
+            device.release();
           }
         },
       );

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
+import type { TrustedAgentToolCaller } from "../../gateway/server-methods/client-types.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -33,6 +34,7 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceTool?: string;
   sourceRole?: "subagent";
+  requester?: TrustedAgentToolCaller;
   callGateway?: GatewayCaller;
   deliveryContext?: DeliveryContext;
   expectedSession?: AgentStepSession;
@@ -74,6 +76,7 @@ export async function runAgentStep(params: {
       const result = await trySessionsSendActiveRunDelivery(
         {
           cfg,
+          admissionConfig: cfg,
           callGateway: gatewayCall,
           runId: stepIdem,
           sessionKey: target.canonicalKey,
@@ -121,6 +124,7 @@ export async function runAgentStep(params: {
         // This is a returned result, not a new request to the peer. Consuming it
         // must not require an acknowledgment or repeat an already delivered final.
         replyExpectation: "optional",
+        agentToolCaller: params.requester,
         params: {
           message: annotateInterSessionPromptText(params.message, inputProvenance),
           ...(params.agentId ? { agentId: params.agentId } : {}),

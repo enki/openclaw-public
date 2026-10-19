@@ -4,6 +4,7 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -41,7 +42,7 @@ import {
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
 } from "./server-plugin-runtime-client.js";
-import { resolveRuntimeSessionParticipant } from "./session-tool-participant.js";
+import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -131,12 +132,21 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
 }
 
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
-export function captureOperatorToolGatewayContinuationContext(target?: {
-  sessionKey: string;
-  agentId?: string;
-}) {
+export function captureOperatorToolGatewayContinuationContext(
+  target?: { sessionKey: string; agentId?: string },
+  options?: { retainRequester?: true },
+) {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
+  const requester =
+    options?.retainRequester && caller
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          origin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
+        }
+      : undefined;
   const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return undefined;
@@ -203,17 +213,42 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         resolved.assertSourceCurrent();
         lifetime.signal.throwIfAborted();
       };
+      const runInScope = <T>(run: () => T): T => {
+        assertCurrent();
+        return withoutGatewayToolCallerIdentity(() =>
+          runOutsideOperatorToolGatewayAuthority(() =>
+            withPluginRuntimeGatewayRequestScope(continuationScope, run),
+          ),
+        );
+      };
       return {
         assertCurrent,
         operatorAuthority: captured?.authority,
+        scopes: resolved.client.connect.scopes,
         signal: lifetime.signal,
         release,
-        run<T>(run: () => T): T {
-          assertCurrent();
-          return withoutGatewayToolCallerIdentity(() =>
-            runOutsideOperatorToolGatewayAuthority(() =>
-              withPluginRuntimeGatewayRequestScope(continuationScope, run),
-            ),
+        run: runInScope,
+        /** Re-enter only the requester selected before transfer, under this retained source. */
+        runWithRequester<T>(run: () => Promise<T>): Promise<T> {
+          return runInScope(() =>
+            requester?.origin
+              ? withGatewayToolCallerIdentity(
+                  {
+                    agentId: requester.agentId,
+                    sessionKey: requester.sessionKey,
+                    requesterOrigin: requester.origin,
+                    operatorAuthority: captured?.authority,
+                    personalToolIdentityScoped: true,
+                    personalToolSelection: Object.freeze({
+                      operatorAuthority: captured?.authority,
+                      requesterOrigin: requester.origin,
+                      assertCurrent,
+                    }),
+                    gatewayContextResolver: resolveGatewayContext,
+                  },
+                  run,
+                )
+              : run(),
           );
         },
       };
@@ -260,13 +295,6 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
-  const runtimeParticipant = resolveRuntimeSessionParticipant({
-    method,
-    requestParams: params,
-    runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-    context,
-    connId: scope?.client?.connId,
-  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -278,6 +306,18 @@ export function resolveInProcessGatewayDispatch(
     method === "agent" ? options?.settleWakeReplay?.assertCurrent : undefined;
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
+  const assertTransferredSettleWakeCurrent =
+    assertSettleWakeCurrent && operatorRunAuthority
+      ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
+      : undefined;
+  assertTransferredSettleWakeCurrent?.();
+  const runtimeAuthority = assertTransferredSettleWakeCurrent
+    ? { assertCurrent: assertTransferredSettleWakeCurrent }
+    : resolveSessionRuntimeAuthority({
+        method,
+        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
+        context,
+      });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
     method === "sessions.create" &&
@@ -293,7 +333,7 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
     selection?.assertCurrent,
-    runtimeParticipant?.assertCurrent,
+    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -557,7 +597,7 @@ export function resolveInProcessGatewayDispatch(
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
       selection?.assertCurrent,
-      runtimeParticipant?.assertCurrent,
+      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,

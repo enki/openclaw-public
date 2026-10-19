@@ -23,6 +23,7 @@ import {
 } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
@@ -46,7 +47,12 @@ export function startSessionsSendReplyFlow(
   }
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
-    completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
+    completion
+      ? completion.request.custody.run(run)
+      : runWithGatewayToolContinuationContext(
+          run,
+          params.replyMode === "peer" ? { retainRequester: true } : undefined,
+        );
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const deliverRequesterReply: Parameters<
@@ -97,6 +103,7 @@ export function startSessionsSendReplyFlow(
                 threadId: stringifyRouteThreadId(params.requesterOrigin?.threadId),
               },
               privateCompletion: true,
+              agentToolCaller: params.requester,
               expectFinal: true,
               onAccepted: (payload) => {
                 const receipt = asOptionalRecord(payload);
@@ -231,6 +238,14 @@ export function prepareSessionsSendReplyContext(params: {
     "replyMode" | "requesterSession" | "requesterDeliveryGeneration"
   >;
 }): SessionsSendReplyContext {
+  const caller = getGatewayToolCallerIdentity();
+  const requester = caller?.requesterOrigin
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        requesterOrigin: caller.requesterOrigin,
+      }
+    : undefined;
   const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
   const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
   const requesterSession = requesterSessionId
@@ -257,6 +272,7 @@ export function prepareSessionsSendReplyContext(params: {
     isRequesterParentOfBackgroundAcpSession(params.targetSession, params.requesterSessionKey);
   return {
     ...params.context,
+    requester,
     requesterSession,
     requesterDeliveryGeneration,
     replyMode: taskOwned ? undefined : params.targetIsSubagent ? "one-way" : "peer",

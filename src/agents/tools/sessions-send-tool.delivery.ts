@@ -37,6 +37,7 @@ import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js"
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
 import {
@@ -139,6 +140,7 @@ function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | un
 
 type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
+  admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
@@ -195,7 +197,7 @@ export async function trySessionsSendActiveRunDelivery(
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
   const assertCaller = captureGatewayToolCallerAssertion();
   try {
-    const selection = resolveGatewayToolOperatorSelection();
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
     const activeOperation =
@@ -225,6 +227,13 @@ export async function trySessionsSendActiveRunDelivery(
     }
     const { inputProvenance, message: messageText } = params.sendParams;
     if (activeOperation && activeRunSessionId && messageText) {
+      const requesterOrigin = selection.requesterOrigin;
+      if (!requesterOrigin) {
+        if (params.mode === "steer") {
+          throw new Error('Cannot verify requester identity for steering; use mode: "followup".');
+        }
+        return {};
+      }
       const queue = async (
         assertCurrent: () => void,
         lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
@@ -242,6 +251,10 @@ export async function trySessionsSendActiveRunDelivery(
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
+          requesterToolAuthority: {
+            requesterOrigin,
+            config: params.admissionConfig,
+          },
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
@@ -279,6 +292,7 @@ export async function trySessionsSendActiveRunDelivery(
             input: {
               text: params.transcriptText ?? messageText,
               provenance: inputProvenance,
+              requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
               idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
             },
@@ -327,8 +341,21 @@ export async function trySessionsSendActiveRunDelivery(
         // Consumed without a confirmed commit: never replay it as a new turn.
         throw new Error(steer.errorMessage);
       }
+      if (
+        steer.reason === "requester_origin_mismatch" ||
+        steer.reason === "tool_authority_mismatch"
+      ) {
+        if (params.mode === "steer") {
+          throw new Error(
+            steer.reason === "requester_origin_mismatch"
+              ? 'Active run has a different requester; use mode: "followup".'
+              : 'Requester policy does not match the active run; use mode: "followup".',
+          );
+        }
+        return {};
+      }
       // A definite capability refusal leaves ordinary input on its captured
-      // conversation. Authority failures and uncertain native commitment never retry.
+      // conversation. Revocation and uncertain native commitment never retry.
       if (
         params.mode !== "steer" &&
         params.allowActiveRunQueueDelivery &&
@@ -379,10 +406,12 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  const caller = getGatewayToolCallerIdentity();
   let fallback:
     | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
     | undefined;
   try {
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     if (fallbackSessionKey) {
       fallback = await params.prepareFallback?.(fallbackSessionKey);
     }
@@ -407,6 +436,15 @@ export async function startSessionsSendAgentRun(
       admissionPending?: boolean;
     }>({
       method: "agent",
+      ...(caller && selection.requesterOrigin
+        ? {
+            agentToolCaller: {
+              agentId: caller.agentId,
+              sessionKey: caller.sessionKey,
+              requesterOrigin: selection.requesterOrigin,
+            },
+          }
+        : {}),
       params: fallbackSessionKey
         ? {
             ...sendParams,
