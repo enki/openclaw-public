@@ -67,9 +67,9 @@ import {
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
-import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
+  buildCommandCommonRunParams,
   resolveCompletionToolPolicy,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
@@ -77,7 +77,6 @@ import {
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
-import { resolveCommandConversationPromptCacheKey } from "./conversation-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -301,67 +300,11 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   const expectation = resolveCommandReplyExpectation(params);
   // Read session fields at invocation time, after admitted CLI binding recovery.
   const buildCommonRunParams = () =>
-    ({
-      preparedRunAdmission: params.preparedRunAdmission,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      promptCacheKey: resolveCommandConversationPromptCacheKey(params),
-      chatType: params.sessionEntry?.chatType,
-      contextWindow: params.sessionEntry?.contextWindow,
-      agentId: params.sessionAgentId,
-      trigger: "user",
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      config: params.cfg,
-      toolOverrides: params.sessionEntry?.toolOverrides,
-      modelHasVision: params.modelHasVision,
-      model: params.modelOverride,
-      modelRoutingProvenance: params.modelRoutingProvenance,
-      thinkLevel: params.resolvedThinkLevel,
-      thinkingExplicit: params.thinkingExplicit,
-      fastMode: params.fastMode,
-      fastModeStartedAtMs: params.fastModeStartedAtMs,
-      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
-      timeoutMs: params.timeoutMs,
-      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-      runId: params.runId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
-      lane: params.opts.lane,
-      swarmExecutionLane: params.opts.swarmExecutionLane,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
-      extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
-      inputProvenance: params.opts.inputProvenance,
-      privateCompletion: params.opts.privateCompletion,
-      skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
-      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-      taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
-      clientCaps: params.opts.clientCaps,
-      gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
-      media: params.opts.media,
-      skillsSnapshot: params.skillsSnapshot,
-      streamParams: params.opts.streamParams,
-      approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-      bashElevated: params.opts.bashElevated,
-      cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-      oneShotCliRun: params.opts.oneShotCliRun,
-      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
-      contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-      suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    buildCommandCommonRunParams(params, {
       disableTools,
-      terminalReplyExpectation: expectation,
-      silentReplyPromptMode:
-        params.opts.silentReplyPromptMode ??
-        (expectation === "result-required" ? "none" : undefined),
-      bootstrapContextMode: params.opts.bootstrapContextMode,
-      bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
+      expectation,
       bootstrapPromptWarningSignaturesSeen,
-      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
-    }) satisfies Partial<RunEmbeddedAgentInternalParams>;
+    });
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
@@ -760,4 +703,3 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   );
   return runEmbeddedAgent(embeddedRunParams);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

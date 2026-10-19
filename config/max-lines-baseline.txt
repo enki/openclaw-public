@@ -85,7 +85,6 @@ extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.ts
-extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
@@ -208,7 +207,6 @@ src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/command/attempt-execution.cli.test.ts
-src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
 src/agents/command/delivery.ts
 src/agents/embedded-agent-runner-extraparams.test.ts

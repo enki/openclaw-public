@@ -1,7 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { prepareCommandConversationContext } from "../../agents/command/conversation-context.js";
+import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
@@ -71,14 +78,36 @@ async function command() {
     }),
   };
   // Independent private command: no owner spread, policy, sender authority or capabilities.
-  return prepareCommandConversationContext({
-    cfg: {},
-    sessionEntry,
-    sessionKey: "agent:main:main",
-    sessionAgentId: "main",
-    opts: { message: "Private completion", inputProvenance: { kind: "internal_system" } },
-    runContext: { messageChannel: "whatsapp", currentChannelId: "+15550001111" },
-  });
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-turn-context-"));
+  const runId = `turn-context:${workspaceDir}`;
+  try {
+    const { opts } = await prepareEmbeddedSessionState({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } },
+      sessionEntry,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionId: sessionEntry.sessionId,
+      opts: {
+        message: "Private completion",
+        skipInitialSessionTouch: true,
+        inputProvenance: { kind: "internal_system" },
+        runContext: { messageChannel: "whatsapp", currentChannelId: "+15550001111" },
+      },
+      storePath: path.join(workspaceDir, "sessions.json"),
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      runId,
+      executionWorkspaceDir: workspaceDir,
+      watchSkills: false,
+      isNewSession: false,
+      isSubagentLaneTurn: false,
+      suppressVisibleSessionEffects: true,
+      sessionStateActor: { actorType: "agent" },
+    });
+    return opts;
+  } finally {
+    clearAgentRunContext(runId);
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
 }
 
 function projection(context: Awaited<ReturnType<typeof prepared>>): Projection {
