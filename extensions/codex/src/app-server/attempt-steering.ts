@@ -363,23 +363,28 @@ export function createCodexSteeringQueue(params: {
       for (const item of liveItems) {
         acceptItem(item);
         // Queue-only callers need the acknowledgement, not the later consumption
-        // receipt. Keep receiver custody until consumption or bounded settlement.
+        // receipt. Keep receiver custody until consumption or this receiving run closes.
         if (item.waitForTranscriptCommit === false) {
           item.resolve();
         }
       }
-      // RPC acceptance is not consumption. A missing user-message echo must not
-      // strand the delivery caller until the entire foreground run is cancelled.
-      // Preserve accepted custody on expiry: replay could duplicate real work.
+      // A confirmation deadline ends only the caller's wait. Accepted input
+      // remains in receiver custody until consumption or this run closes.
       const batchId = clientUserMessageId;
-      if (dispatchedBatches.has(batchId)) {
+      if (
+        dispatchedBatches.has(batchId) &&
+        liveItems.some((item) => item.waitForTranscriptCommit !== false)
+      ) {
         const timer = setTimeout(() => {
           confirmationTimers.delete(batchId);
-          const batch = dispatchedBatches.get(batchId);
-          dispatchedBatches.delete(batchId);
-          const error = new Error("Codex steering transcript consumption confirmation timed out");
-          for (const item of batch ?? []) {
-            rejectItem(item, error);
+          const error = new CodexSteeringAcceptedUnconfirmedError(
+            "Codex accepted steering but did not confirm transcript consumption",
+            { cause: new Error("Codex steering transcript consumption confirmation timed out") },
+          );
+          for (const item of dispatchedBatches.get(batchId) ?? []) {
+            if (item.waitForTranscriptCommit !== false) {
+              item.reject(error);
+            }
           }
         }, params.requestTimeoutMs);
         timer.unref?.();

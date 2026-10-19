@@ -40,10 +40,8 @@ import {
 } from "./gateway-caller-context.js";
 import * as gatewayContinuation from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
-import {
-  prepareSessionsSendCommunication,
-  readSessionCommunicationEndpoint,
-} from "./sessions-send-communication.js";
+import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 
 const recordParticipant = vi.hoisted(() => vi.fn());

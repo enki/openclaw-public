@@ -288,7 +288,8 @@ it.each(dispatchCases)(
         agents: {
           ownership: "explicit" as const,
           entries: {
-            main: {},
+            main:
+              sandboxSessionKey === "agent:main:policy" ? { tools: { deny: ["web_search"] } } : {},
             work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
           },
           defaults: {
@@ -942,6 +943,12 @@ it.each(dispatchCases)(
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        if (sandboxSessionKey === "agent:main:policy") {
+          expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toMatchObject({
+            allowed: false,
+            persistentAllowed: false,
+          });
+        }
         if (preparedAuth) {
           expect(runAttempt.mock.calls[0]?.[0].model.headers).toEqual({
             Authorization: preparedAuth === "explicit-header" ? "Bearer runtime-token" : null,
