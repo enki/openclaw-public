@@ -66,7 +66,7 @@ function historyPane(request = vi.fn(async () => historyPage())) {
 }
 
 function olderRequest(sessionKey: string, offset = 2) {
-  return { sessionKey, limit: 1000, maxBytes: 1024 * 1024, toolResultMaxChars: 2_000, offset };
+  return { sessionKey, limit: 1000, maxBytes: 2 * 1024 * 1024, toolResultMaxChars: 2_000, offset };
 }
 
 function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {
@@ -412,9 +412,11 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   }));
   const { pane, state } = testPane(request);
   const key = "catalog:claude:gateway%3Alocal:thread-1";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   state.sessionKey = key;
   pane.sessionKey = key;
   pane.history.catalogCursor = "final-page";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   appendChatThread(pane);
   vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");

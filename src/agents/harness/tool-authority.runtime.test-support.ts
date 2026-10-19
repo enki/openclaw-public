@@ -1,15 +1,20 @@
 import { vi } from "vitest";
-import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 
 export const sessionId = "authority-session";
 export const sessionKey = "agent:main:main";
+type EmbeddedRunHandle = ReturnType<typeof createEmbeddedRunHandle>;
+type QueueMessage = EmbeddedRunHandle["queueMessage"];
 export const own: ReplyToolAuthorityOverlay = {
   senderIsOwner: true,
   disableTools: false,
@@ -61,15 +66,43 @@ export async function admitted<T>(
 
 export function publishPreparedHandle(
   toolAuthorityFingerprint: string | undefined,
-  queueMessage: ReturnType<typeof createEmbeddedRunHandle>["queueMessage"],
+  queueMessage: QueueMessage,
+  configure?: (handle: EmbeddedRunHandle, queueMessage: QueueMessage) => void,
 ) {
   const handle = createEmbeddedRunHandle({
     runId: attempt.runId,
     toolAuthorityFingerprint,
     queueMessage,
+    supportsTranscriptCommitWait: true,
   });
+  handle.kind = "embedded";
+  handle.cancel = (reason) => handle.abort(reason === "restart" ? reason : undefined);
+  // Host-prepared tool authority binds every steer to final dispatch, as real runtimes do.
+  handle.messageInjectionV2 = {
+    version: 2,
+    isAvailable: () => true,
+    queueMessage: async (text, options, assertCurrent) => {
+      assertCurrent();
+      return queueMessage(text, options);
+    },
+  };
+  configure?.(handle, queueMessage);
   setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
   return handle;
+}
+
+export function interceptMessages(
+  handle: EmbeddedRunHandle,
+  receive: NonNullable<EmbeddedRunHandle["messageInjectionV2"]>["queueMessage"],
+) {
+  handle.messageInjectionV2 = {
+    version: 2,
+    isAvailable: () => true,
+    queueMessage: async (text, options, assertCurrent, authorityKind) => {
+      assertCurrent();
+      return receive(text, options, assertCurrent, authorityKind);
+    },
+  };
 }
 
 export async function published<T>(
@@ -80,6 +113,7 @@ export async function published<T>(
   }) => Promise<T>,
   params: Partial<Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1]> = {},
   operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
+  configureHandle?: (handle: EmbeddedRunHandle, queueMessage: QueueMessage) => void,
 ) {
   return admitted(
     async ({ admittedRunContext, close }) =>
@@ -91,7 +125,11 @@ export async function published<T>(
           const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
             async () => {},
           );
-          const handle = publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
+          const handle = publishPreparedHandle(
+            prepared.toolAuthorityFingerprint,
+            queue,
+            configureHandle,
+          );
           try {
             return await run({ handle, queue, close });
           } finally {

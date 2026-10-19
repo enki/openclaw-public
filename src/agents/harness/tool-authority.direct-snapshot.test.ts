@@ -1,17 +1,15 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import {
-  beginReplyMessageInjectionTarget,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority-inbound.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   registerSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
 } from "../../gateway/subagent-completion-tool-handoff.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -29,7 +27,7 @@ import {
 const dirs = useSessionStoreTempDirs(afterAll, "openclaw-direct-handoff-");
 afterEach(() => {
   testing.resetActiveEmbeddedRuns();
-  replyTesting.resetReplyRunRegistry();
+  replyTesting.resetSessionControllerForTest();
 });
 it.each([
   "plain-owner",
@@ -185,7 +183,7 @@ it.each([
           operatorAuthority: authority(true),
           disableTools: false,
         });
-        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+        const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
         expect(target).toBeDefined();
         const injection = await beginReplyMessageInjectionTarget(
           target!,

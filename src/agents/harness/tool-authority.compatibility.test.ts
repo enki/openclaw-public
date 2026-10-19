@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import {
-  beginReplyMessageInjectionTarget,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority-inbound.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { testing } from "../embedded-agent-runner/runs.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
@@ -15,7 +13,7 @@ import { attempt, own, published, sessionKey } from "./tool-authority.runtime.te
 
 afterEach(() => {
   testing.resetActiveEmbeddedRuns();
-  replyTesting.resetReplyRunRegistry();
+  replyTesting.resetSessionControllerForTest();
 });
 
 describe("frozen execution capability steering", () => {
@@ -121,7 +119,7 @@ describe("frozen execution capability steering", () => {
             operatorAuthority: authority(true),
             disableTools: false,
           });
-          const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+          const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
           if (!target) {
             throw new Error("Expected real direct target");
           }
