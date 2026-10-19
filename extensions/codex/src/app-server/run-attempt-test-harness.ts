@@ -5,7 +5,6 @@ import {
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
-  runBeforeToolCallHook,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
@@ -22,6 +21,7 @@ import {
   createEmptyPluginRegistry,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
+  runInHarnessToolAuthorityForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -41,7 +41,7 @@ import {
 import * as codexRequirements from "./config-requirements.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
-  createCodexTestHostCapabilities,
+  createHarnessHostCapabilities,
   getCodexTestToolFactory,
 } from "./host-capability.test-support.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
@@ -84,34 +84,6 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
     agents: {},
   })),
 }));
-
-function createHarnessHostCapabilities(
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams["hostCapabilities"] {
-  return createCodexTestHostCapabilities({
-    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
-      await runBeforeToolCallHook({
-        ...request,
-        approvalMode: approvalMode === "defer" ? "defer" : "request",
-        ctx: Object.freeze({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          ...(params.config ? { config: params.config } : {}),
-          ...(params.workspaceDir
-            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
-            : {}),
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-          runId: params.runId,
-          trigger: params.trigger,
-          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-          turnSourceChannel: params.messageChannel ?? params.messageProvider,
-          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
-          turnSourceAccountId: params.agentAccountId,
-          turnSourceThreadId: params.currentThreadTs,
-        }),
-      }),
-  });
-}
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -233,17 +205,32 @@ export function runCodexAppServerAttempt(
     }
   };
   trackedParams.onExecutionPhase = observeExecutionPhase;
-  const promise = runCodexAppServerAttemptImpl(trackedParams, {
-    ...options,
-    startupTimeoutFloorMs: options.startupTimeoutFloorMs ?? 30_000,
-    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
-    ...(clientFactory ? { clientFactory } : {}),
-  }).finally(() => {
-    if (trackedParams.onExecutionPhase === observeExecutionPhase) {
-      trackedParams.onExecutionPhase = onExecutionPhase;
+  const attemptOptions = options;
+  const runAdmitted = async (admitted: EmbeddedRunAttemptParams) => {
+    // Steering callers retain the original params even when cancellation adds a copy.
+    params.toolAuthorityFingerprint = admitted.toolAuthorityFingerprint;
+    try {
+      return await runCodexAppServerAttemptImpl(admitted, {
+        ...attemptOptions,
+        startupTimeoutFloorMs: attemptOptions.startupTimeoutFloorMs ?? 30_000,
+        bindingStore: attemptOptions.bindingStore ?? testCodexAppServerBindingStore,
+        ...(clientFactory ? { clientFactory } : {}),
+      });
+    } finally {
+      if (params.toolAuthorityFingerprint === admitted.toolAuthorityFingerprint) {
+        delete params.toolAuthorityFingerprint;
+      }
     }
-    activeAppServerAttemptsForTest.delete(entry);
-  });
+  };
+  // Gateway runs reach the harness inside an admitted session turn.
+  const promise = runInHarnessToolAuthorityForTest(trackedParams, "codex", runAdmitted).finally(
+    () => {
+      if (trackedParams.onExecutionPhase === observeExecutionPhase) {
+        trackedParams.onExecutionPhase = onExecutionPhase;
+      }
+      activeAppServerAttemptsForTest.delete(entry);
+    },
+  );
   entry.promise = promise;
   activeAppServerAttemptsForTest.add(entry);
   promise.catch(() => undefined);

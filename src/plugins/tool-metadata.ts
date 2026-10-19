@@ -49,6 +49,24 @@ export function getPluginToolMeta(tool: { name: string }): PluginToolMeta | unde
   return pluginToolMeta.get(tool);
 }
 
+/** Shared catalog/report provenance; names never establish a tool's owner. */
+export function classifyAgentToolSource(tool: object): {
+  source: "openclaw" | "mcp";
+  sourceName: string;
+  mcp?: PluginToolMcpMeta;
+} {
+  const meta = pluginToolMeta.get(tool);
+  const pluginId = meta?.pluginId?.trim();
+  const mcp = meta?.mcp;
+  if (mcp) {
+    return { source: "mcp", sourceName: mcp.safeServerName || pluginId || "mcp", mcp };
+  }
+  if (pluginId === "bundle-mcp") {
+    return { source: "mcp", sourceName: pluginId };
+  }
+  return { source: "openclaw", sourceName: pluginId || "core" };
+}
+
 /** Copies plugin ownership metadata when wrappers replace a tool object. */
 export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
   const meta = pluginToolMeta.get(source);
