@@ -6,7 +6,7 @@ import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-export type BroadcastFrame<Payload = unknown> = {
+type BroadcastFrame<Payload = unknown> = {
   type: "event";
   event: string;
   seq: number;

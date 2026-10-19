@@ -17,6 +17,7 @@ import {
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import { captureRequesterOrigin } from "./requester-origin.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -38,6 +39,31 @@ export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main"
     sessionKey,
     requesterOrigin,
   };
+}
+
+export function createDurableSessionsSendTestRun(runId: string, afterCommit?: () => Promise<void>) {
+  const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async (_text, options) => {
+    const recorder = options?.userTurnTranscriptRecorder;
+    if (!recorder || !(await recorder.persistApproved())) {
+      throw new Error("Steering fixture did not commit the admitted guidance");
+    }
+    await afterCommit?.();
+  });
+  const handle = createEmbeddedRunHandle({
+    runId,
+    queueMessage,
+    supportsTranscriptCommitWait: true,
+  });
+  handle.messageInjectionV2 = {
+    version: 2,
+    isAvailable: () => true,
+    queueMessage: async (text, options, assertCurrent) => {
+      assertCurrent();
+      await queueMessage(text, options);
+      options?.onQueueAccepted?.(true);
+    },
+  };
+  return { handle, queueMessage };
 }
 
 const activeOwners: Array<() => Promise<void>> = [];
@@ -148,6 +174,10 @@ export async function activeRun(
   const queueMessage = vi.fn(async (_text: string, _options?: EmbeddedAgentQueueMessageOptions) => {
     if (options.rejects) {
       throw new Error("active session ended before queued steering message was committed");
+    }
+    const recorder = _options?.userTurnTranscriptRecorder;
+    if (!recorder || !(await recorder.persistApproved())) {
+      throw new Error("Steering fixture did not commit the admitted guidance");
     }
   });
   await setSessionsSendTestActiveRun(
@@ -293,15 +323,15 @@ export function registerSessionsSendRejectedSteeringTests({
           toolAuthorityFingerprint: expect.any(String),
           steeringMode: "all",
           debounceMs: 0,
-          deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: false,
+          deliveryTimeoutMs: undefined,
+          waitForTranscriptCommit: true,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         });
       } else if (disposition === "steered") {
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(queueMessage.mock.calls[0]?.[0]).toContain("[TASK-COMPLETE] occupancy ready");
-        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
+        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(true);
         // Guidance joins the receiver's reply owner; it cannot impose a new output policy.
         expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       } else {
@@ -369,7 +399,7 @@ export function registerSessionsSendRejectedSteeringTests({
           abortOnUnconfirmedTranscript: false,
           options: expect.objectContaining({
             assertCurrent: expect.any(Function),
-            waitForTranscriptCommit: false,
+            waitForTranscriptCommit: true,
           }),
         });
       } finally {
@@ -404,16 +434,15 @@ export function registerSessionsSendActiveSteeringTests({
 
   it.each([
     {
-      name: "steers a child busy past the delivery deadline",
+      name: "steers a child after durable admission",
       steered: true,
-      busyPastDeadline: true,
     },
     {
       name: "starts the same child during compaction",
       rejection: "injection_unavailable" as const,
     },
   ])("sessions_send $name", async (testCase) => {
-    const { steered, busyPastDeadline, rejection } = testCase;
+    const { steered, rejection } = testCase;
     const requesterKey = "agent:main:main";
     const targetKey = "agent:main:subagent:steering-child";
     const sessionId = "own-child-active-session";
@@ -426,16 +455,6 @@ export function registerSessionsSendActiveSteeringTests({
       sessionId,
       requesterSessionKey: requesterKey,
     });
-    if (busyPastDeadline) {
-      queueMessage.mockImplementationOnce(async (_text, options) => {
-        // Admission succeeds, but this busy run cannot commit before the delivery deadline.
-        if (options?.waitForTranscriptCommit !== false) {
-          throw new Error(
-            "queued steering message was not committed to the transcript before timeout",
-          );
-        }
-      });
-    }
     const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
     const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
@@ -470,8 +489,8 @@ export function registerSessionsSendActiveSteeringTests({
           }),
           steeringMode: "all",
           debounceMs: 0,
-          deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: false,
+          deliveryTimeoutMs: undefined,
+          waitForTranscriptCommit: true,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         },
@@ -637,10 +656,14 @@ export function registerSessionsSendActiveSteeringTests({
         abort,
       });
       queueMessage.mockImplementationOnce(async (_text, options) => {
-        expect(options?.waitForTranscriptCommit).toBe(false);
+        expect(options?.waitForTranscriptCommit).toBe(true);
         if (unconfirmed) {
           options?.onQueueAccepted?.(true);
           throw new Error("synthetic consumption confirmation unavailable after acceptance");
+        }
+        const recorder = options?.userTurnTranscriptRecorder;
+        if (!recorder || !(await recorder.persistApproved())) {
+          throw new Error("Steering fixture did not commit the admitted guidance");
         }
       });
       callGatewayMock.mockImplementation(async (request) => {
@@ -681,7 +704,7 @@ export function registerSessionsSendActiveSteeringTests({
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage).toHaveBeenCalledWith(
         expect.stringContaining("synthetic sibling update"),
-        expect.objectContaining({ waitForTranscriptCommit: false }),
+        expect.objectContaining({ waitForTranscriptCommit: true }),
       );
       expect(calls.filter((call) => call.method === "agent")).toHaveLength(0);
       expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);

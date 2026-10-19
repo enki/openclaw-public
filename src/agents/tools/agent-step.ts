@@ -124,6 +124,7 @@ export async function runAgentStep(params: {
   }
   let response: Record<string, unknown> | undefined;
   let steered = false;
+  let callGateway = communication?.callGateway ?? gatewayCall;
   try {
     if (params.sourceRole !== "subagent" && isSessionRunActiveForKey(params.sessionKey)) {
       const cfg = communication?.admissionConfig ?? getRuntimeConfig();
@@ -155,7 +156,8 @@ export async function runAgentStep(params: {
           {
             cfg,
             admissionConfig: communication?.admissionConfig ?? cfg,
-            callGateway: communication?.callGateway ?? gatewayCall,
+            callGateway,
+            callDurableGateway: communication?.callDurableGateway,
             runId: stepIdem,
             sessionKey: target.canonicalKey,
             sessionStoreTarget: target,
@@ -193,6 +195,8 @@ export async function runAgentStep(params: {
           }
           steered = result.targetDisposition === "steered";
           accepted ||= steered;
+        } else if (result.callGateway) {
+          callGateway = result.callGateway;
         }
       } finally {
         if (!accepted) {
@@ -201,7 +205,7 @@ export async function runAgentStep(params: {
       }
     }
     if (!steered) {
-      response = await (communication?.callGateway ?? gatewayCall)({
+      response = await callGateway({
         method: "agent",
         // This is a returned result, not a new request to the peer. Consuming it
         // must not require an acknowledgment or repeat an already delivered final.
