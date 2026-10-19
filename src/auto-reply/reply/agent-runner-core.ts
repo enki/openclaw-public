@@ -406,6 +406,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
         text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+        isError: true,
       }),
     );
   }

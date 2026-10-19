@@ -64,6 +64,7 @@ it("renders restart recovery ownership changes as session guidance", async () =>
     expect(reply?.text).toBe(
       "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
     );
+    expect(reply?.isError).toBe(true);
     expect(reply?.text).not.toContain("restart recovery claim");
   } finally {
     replyOperation.complete();

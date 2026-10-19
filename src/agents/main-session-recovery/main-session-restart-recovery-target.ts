@@ -14,6 +14,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
+import { owesRequesterCompletion } from "../subagents/registry/subagent-requester-settle-identity.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 type RestartRecoveryDispatchParams = {
@@ -112,7 +113,7 @@ export function captureYieldedMainSessionContinuation(params: {
   const owner = listRuns().find(
     (run) =>
       !run.collect &&
-      run.expectsCompletionMessage === true &&
+      owesRequesterCompletion(run) &&
       !run.requesterTurnRunId &&
       run.requesterSettleWake?.requesterYieldBatch === true &&
       run.requesterSettleWake.rearmGeneration !== undefined &&
@@ -127,6 +128,7 @@ export function captureYieldedMainSessionContinuation(params: {
   const rearmGeneration = wake?.rearmGeneration;
   return () =>
     listRuns().includes(owner) &&
+    owesRequesterCompletion(owner) &&
     !owner.requesterTurnRunId &&
     owner.requesterSettleWake === wake &&
     wake?.rearmGeneration === rearmGeneration;

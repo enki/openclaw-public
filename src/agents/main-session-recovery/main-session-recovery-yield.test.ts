@@ -8,6 +8,7 @@ import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js"
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import { createMainSessionRecoveryStoreFixture } from "./main-session-recovery-store.test-support.js";
+import { markOrphanedMainSessionForRecovery } from "./main-session-restart-recovery-marking.js";
 
 describe("yielded requester admission", () => {
   const sessionKey = "agent:main:main";
@@ -140,5 +141,95 @@ describe("yielded requester admission", () => {
     );
     await expect(claimRecovery()).rejects.toThrow("continuation changed before recovery handoff");
     expect(read().restartRecoveryRuns).toEqual([{ runId: "yielded-run", lifecycleGeneration }]);
+  });
+
+  it.each(["live pending", "live dispatching", "killed dispatching"] as const)(
+    "reconciles orphaned delivery custody only when its yielded wake is retired: %s",
+    async (state) => {
+      const killed = state === "killed dispatching";
+      const retained = createSubagentRunRecord({
+        ...child,
+        requesterSettleWake: {
+          ...child.requesterSettleWake!,
+          status: state === "live pending" ? "pending" : "dispatching",
+          attemptCount: 1,
+        },
+      });
+      if (killed) {
+        retained.suppressCompletionDelivery = true;
+        retained.endedReason = "subagent-killed";
+        retained.killReconciliation = { killedAt: 2000, supersededAt: 3000 };
+      }
+      subagentRuns.set(retained.runId, retained);
+      await write({
+        sessionId: "session-1",
+        updatedAt: 4000,
+        endedAt: 4000,
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "older-orphan-claim",
+        restartRecoveryDeliverySourceRunId: "older-orphan-source",
+      });
+      const before = read();
+      const childBefore = structuredClone(retained);
+      await expect(
+        markOrphanedMainSessionForRecovery({
+          target: { agentId: "main", sessionKey, storePath },
+          expectedSessionId: "session-1",
+          cfg: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({ marked: killed ? 1 : 0 });
+      if (killed) {
+        expect(read()).toMatchObject({
+          abortedLastRun: true,
+          mainRestartRecovery: { chargedAttempts: 0 },
+          restartRecoveryDeliveryRunId: "older-orphan-claim",
+          restartRecoveryDeliverySourceRunId: "older-orphan-source",
+        });
+      } else {
+        expect(read()).toEqual(before);
+      }
+      expect(subagentRuns.get(retained.runId)).toBe(retained);
+      expect(retained).toEqual(childBefore);
+    },
+  );
+
+  it("rejects a yielded handoff if its live child obligation is killed before commit", async () => {
+    const retained = createSubagentRunRecord({
+      ...child,
+      requesterSettleWake: { ...child.requesterSettleWake! },
+    });
+    subagentRuns.set(retained.runId, retained);
+    await write({
+      ...read(),
+      abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "waiting-yield", revision: 1, chargedAttempts: 0 },
+    });
+    const before = read();
+    const replace = sessionAccessor.applySessionEntryReplacements;
+    let captured = false;
+    vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation((params) =>
+      replace({
+        ...params,
+        update: async (entries) => {
+          const result = await params.update(entries);
+          captured = true;
+          retained.suppressCompletionDelivery = true;
+          retained.endedReason = "subagent-killed";
+          retained.killReconciliation = { killedAt: 2000, supersededAt: 3000 };
+          return result;
+        },
+      }),
+    );
+    await expect(
+      markOrphanedMainSessionForRecovery({
+        target: { agentId: "main", sessionKey, storePath },
+        expectedSessionId: "session-1",
+        cfg: { session: { store: storePath } },
+      }),
+    ).rejects.toThrow("Yielded requester continuation changed before recovery handoff");
+    expect(captured).toBe(true);
+    expect(read()).toEqual(before);
+    expect(retained.suppressCompletionDelivery).toBe(true);
+    expect(retained.requesterSettleWake).toBeDefined();
   });
 });
