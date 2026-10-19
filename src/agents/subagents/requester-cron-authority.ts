@@ -580,9 +580,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
             }
           },
         }
-      : dispatch.authority.kind === "followup"
-        ? { release: () => discard(dispatch.authority) }
-        : {}),
+      : { release: () => discard(dispatch.authority) }),
     bindRunScope: (scope) => {
       if (
         dispatch.authority.runScopeBound ||

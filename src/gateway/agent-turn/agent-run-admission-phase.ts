@@ -33,7 +33,10 @@ import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
-import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
+import {
+  prepareGatewayCronCreatorAuthorityAdmission,
+  type GatewayCronCreatorAuthorityAdmission,
+} from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
@@ -287,6 +290,19 @@ export async function prepareAgentRunDispatch(
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
+  let cronCreatorAuthority: GatewayCronCreatorAuthorityAdmission | undefined;
+  let callerAuthorityReleased = false;
+  const releaseCallerAuthority = () => {
+    if (callerAuthorityReleased) {
+      return;
+    }
+    callerAuthorityReleased = true;
+    try {
+      cronCreatorAuthority?.release?.();
+    } finally {
+      capturedOperator?.release();
+    }
+  };
   let followupCompletion: FollowupCompletionOwner | undefined;
   let adoptedParentResume: SubagentRunRecord | undefined;
   let restoreAdmittedRestartRecoveryInterrupted:
@@ -306,7 +322,7 @@ export async function prepareAgentRunDispatch(
       activeRunAbort,
       activeGatewayWorkAdmission,
       admittedRunIdentity,
-      releaseCallerAuthority: capturedOperator?.release,
+      releaseCallerAuthority,
       restoreAdmittedRestartRecoveryInterrupted,
       lease,
       completion,
@@ -627,6 +643,22 @@ export async function prepareAgentRunDispatch(
         return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
+    cronCreatorAuthority = prepareGatewayCronCreatorAuthorityAdmission(
+      {
+        runId: params.runId,
+        resolvedSessionKey: params.resolvedSessionKey,
+        sessionId: params.getAdmittedSessionId(),
+        spawnedBy: params.sessionEntry?.spawnedBy,
+        client: params.client,
+        request: params.request,
+        isCurrent: params.hasCurrentClientAuthority,
+        inputProvenance: userTurn.inputProvenance,
+        hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
+        isOneShotModelRun: params.isOneShotModelRun,
+        isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
+      },
+      activeRunAbort.controller.signal,
+    );
     followupCompletion?.markAccepted(params.runId);
     params.markAgentRunAccepted(true);
     adoptedParentResume = undefined;
@@ -658,31 +690,11 @@ export async function prepareAgentRunDispatch(
         lifecycleStorePath,
       );
     }
-    const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
-      runId: params.runId,
-      resolvedSessionKey: params.resolvedSessionKey,
-      sessionId: params.getAdmittedSessionId(),
-      spawnedBy: params.sessionEntry?.spawnedBy,
-      client: params.client,
-      request: params.request,
-      isCurrent: params.hasCurrentClientAuthority,
-      inputProvenance: userTurn.inputProvenance,
-      hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
-      isOneShotModelRun: params.isOneShotModelRun,
-      isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-    });
-    const releaseOperatorAuthority = capturedOperator.release;
     return {
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      releaseCallerAuthority: () => {
-        try {
-          cronCreatorAuthority?.release?.();
-        } finally {
-          releaseOperatorAuthority();
-        }
-      },
+      releaseCallerAuthority,
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       timeoutSeconds,
