@@ -7,7 +7,6 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import type {
   AgentHarness,
-  AgentHarnessNativeSubagents,
   EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -197,7 +196,9 @@ export type NativeSubagentsReadRequest = {
   assertCurrent(): void;
 };
 
-export type NativeSubagentsSnapshot = AgentHarnessNativeSubagents | undefined;
+export type NativeSubagentsSnapshot = Awaited<
+  ReturnType<NonNullable<AgentHarness["readNativeSubagents"]>>
+>;
 
 export type NativeExecutionWait = {
   kind: "approval" | "user_input" | "agent_messages" | "children";

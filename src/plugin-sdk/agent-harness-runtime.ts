@@ -138,7 +138,6 @@ export type {
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessNativeCompaction,
-  AgentHarnessNativeSubagents,
   AgentHarnessNativeCompactionParams,
   AgentHarnessNativeCompactionRequest,
   AgentHarnessModelCatalogParams,

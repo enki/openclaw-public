@@ -1,6 +1,6 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
-import type { AgentHarnessNativeSubagents } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import type { NativeSubagentsSnapshot } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
@@ -50,7 +50,7 @@ export async function readCodexNativeSubagents(
     const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId, {
       waitForExit: false,
     });
-    let snapshot: AgentHarnessNativeSubagents | undefined;
+    let snapshot: NativeSubagentsSnapshot;
     try {
       assertCurrent();
       if (retained) {
