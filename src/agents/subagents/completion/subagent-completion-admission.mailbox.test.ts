@@ -169,3 +169,88 @@ it("does not resurrect a suspended reservation after the requester lookup finish
     expect(await restoration).toEqual([]);
   });
 });
+
+it.each(["owed", "killed", "suppressed", "retired during lookup"] as const)(
+  "restores only owed requester wakes before new human input (%s)",
+  async (scenario) => {
+    await withReservationState(
+      {
+        status: "dispatching",
+        attemptCount: 1,
+        rearmGeneration: 1,
+        requesterYieldBatch: true,
+        yieldedFinalDeliverable: true,
+        // The other member no longer has a retained wake, as after partial cleanup.
+        batchRunIds: ["completion-run", "already-retired-sibling"],
+      },
+      async ({ entry, inputs, reserve }) => {
+        const retireObligation = () => {
+          const current = subagentRuns.get(entry.runId);
+          if (!current) {
+            throw new Error("Synthetic completion owner disappeared");
+          }
+          subagentRuns.set(entry.runId, {
+            ...current,
+            suppressCompletionDelivery: true,
+            suppressAnnounceReason: "killed",
+            endedReason: "subagent-killed",
+            killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+          });
+        };
+        if (scenario === "killed") {
+          retireObligation();
+        } else if (scenario === "suppressed") {
+          subagentRuns.set(entry.runId, { ...entry, suppressCompletionDelivery: true });
+        }
+        // Restore normally receives the currently published startup snapshot.
+        const observed = subagentRuns.get(entry.runId);
+        if (!observed) {
+          throw new Error("Synthetic startup snapshot disappeared");
+        }
+        const requester = {
+          cfg: {},
+          entry: { sessionId: "requester-session", updatedAt: 1 },
+          canonicalKey: entry.requesterSessionKey,
+          agentId: entry.requesterAgentId,
+          storePath: entry.requesterStorePath,
+        };
+        const entered = createDeferredCore();
+        const lookup =
+          createDeferredCore<
+            Awaited<ReturnType<typeof requesterLookup.loadRequesterSessionEntry>>
+          >();
+        vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
+          entered.resolve();
+          return scenario === "retired during lookup" ? await lookup.promise : requester;
+        });
+        const restoration = reserveRestoredSubagentControllerSources([observed]);
+        if (scenario === "retired during lookup") {
+          try {
+            await entered.promise;
+            retireObligation();
+          } finally {
+            lookup.resolve(requester);
+          }
+        }
+        const restored = await restoration;
+        inputs.push(...restored);
+        const human = reserve("new-human-input");
+        const claim = tryClaimSessionControllerTask(human, "visible");
+        if (scenario === "owed") {
+          expect(restored).toHaveLength(1);
+          expect(restored[0]?.phase).toBe("preparing");
+          expect(claim).toBeUndefined();
+          for (const input of restored) {
+            retireSessionControllerInput(input);
+          }
+          await Promise.all(restored.map((input) => input.settlement.promise));
+          expect(tryClaimSessionControllerTask(human, "visible")).toBeDefined();
+        } else {
+          // The real mailbox selector must admit the human, not merely return fewer rows.
+          expect(claim).toBeDefined();
+          expect(restored).toEqual([]);
+        }
+      },
+    );
+  },
+);

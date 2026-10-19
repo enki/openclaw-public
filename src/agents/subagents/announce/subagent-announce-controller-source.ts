@@ -21,6 +21,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  isSubagentObligationRetired,
 } from "../registry/subagent-requester-settle-identity.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
 
@@ -134,6 +135,10 @@ export async function reserveRestoredSubagentControllerSources(
   const reservations: Array<[number, () => Promise<SessionControllerInput | undefined>]> = [];
   const entriesById = new Map(entries.map((entry) => [entry.runId, entry]));
   for (const entry of entries) {
+    // Retired obligations cannot reserve FIFO ahead of new requester input.
+    if (isSubagentObligationRetired(entry)) {
+      continue;
+    }
     if (
       entry.expectsCompletionMessage === true &&
       !hasRequesterCompletionCohort(entry) &&
@@ -151,6 +156,7 @@ export async function reserveRestoredSubagentControllerSources(
           const current = getCurrentSubagentRunOwner(subagentRuns, entry);
           if (
             !current ||
+            isSubagentObligationRetired(current) ||
             hasRequesterCompletionCohort(current) ||
             (current.delivery?.status !== "pending" &&
               current.delivery?.status !== "in_progress") ||
@@ -206,13 +212,26 @@ export async function reserveRestoredSubagentControllerSources(
           entry.requesterSessionKey,
           entry.requesterAgentId,
         );
+        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
         if (
-          !(wake.status === "pending" && wake.nextAttemptAt !== undefined) &&
-          resolveRequesterSettleRecoveryCustody(requester.entry, identity)
+          !current ||
+          isSubagentObligationRetired(current) ||
+          !current.requesterSettleWake ||
+          current.requesterSettleWake.rearmGeneration !== wake.rearmGeneration ||
+          batch.some((member) => {
+            const owner = getCurrentSubagentRunOwner(subagentRuns, member);
+            return (
+              !owner ||
+              !owner.requesterSettleWake ||
+              owner.requesterSettleWake.rearmGeneration !== wake.rearmGeneration
+            );
+          }) ||
+          (!(wake.status === "pending" && wake.nextAttemptAt !== undefined) &&
+            resolveRequesterSettleRecoveryCustody(requester.entry, identity))
         ) {
           return undefined;
         }
-        return reserveSubagentControllerSource(entry, identity.batchKey, undefined, caller, {
+        return reserveSubagentControllerSource(current, identity.batchKey, undefined, caller, {
           replaceInactiveTarget: true,
           requester,
         });
