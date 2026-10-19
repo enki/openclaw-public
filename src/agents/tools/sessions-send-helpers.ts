@@ -5,12 +5,6 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
-import {
-  logSessionOwnershipLookupFailure,
-  lookupFailedDenialMessage,
-  lookupFailedOperationMessage,
-  sessionOwnershipLookupFailure,
-} from "../../plugin-sdk/session-visibility-internal.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { jsonResult } from "./tool-results.js";
 
@@ -35,38 +29,31 @@ export function sendFailure(
   });
 }
 
-export function sendOwnershipLookupFailure(
-  error: unknown,
-  params: { requesterSessionKey: string; restrictToSpawned: boolean },
-) {
-  const failure = sessionOwnershipLookupFailure(error);
-  logSessionOwnershipLookupFailure({
-    requesterSessionKey: params.requesterSessionKey,
-    failure,
-  });
-  return sendFailure(
-    params.restrictToSpawned ? "forbidden" : "error",
-    params.restrictToSpawned
-      ? lookupFailedDenialMessage("send", failure.kind)
-      : lookupFailedOperationMessage("send", failure.kind),
-  );
-}
-
 export function sendReplyResult(
   receipt: { runId: string; sessionKey: string; watched?: boolean },
-  result: { replyText?: string; sourceReplyDelivered?: boolean },
+  result: { replyText?: string; replyTruncated?: true; sourceReplyDelivered?: boolean },
 ) {
-  const { replyText: reply, sourceReplyDelivered } = result;
+  const { replyText: reply, replyTruncated, sourceReplyDelivered } = result;
+  if (!reply) {
+    return jsonResult({
+      ...receipt,
+      status: "no_reply" as const,
+      message: sourceReplyDelivered
+        ? "The target delivered its final reply directly to its source conversation. Do not resend."
+        : "No visible reply or pending delivery. Continue or retry if needed.",
+    });
+  }
   return jsonResult({
     ...receipt,
-    ...(reply
-      ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
-      : {
-          status: "no_reply" as const,
-          message: sourceReplyDelivered
-            ? "The target delivered its final reply directly to its source conversation. Do not resend."
-            : "No visible reply or pending delivery. Continue or retry if needed.",
-        }),
+    status: "ok" as const,
+    delivery: { status: "skipped" as const },
+    ...(replyTruncated
+      ? {
+          replyTruncated,
+          note: "The reply may be truncated. Ask the target for the missing section or a file containing the full reply; do not repeat the original task.",
+        }
+      : {}),
+    reply,
   });
 }
 

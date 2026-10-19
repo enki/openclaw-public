@@ -449,7 +449,11 @@ it.each(dispatchCases)(
           ),
         ).toBeUndefined();
         expect(
-          resolveRestartRecoverySteeringBlockReason(recoveredEntry, params.sessionId, params.runId),
+          resolveRestartRecoverySteeringBlockReason(
+            recoveredEntry,
+            params.sessionId,
+            "synthetic-unrelated-source",
+          ),
         ).toBe("stale-claim");
         expect(
           resolveRestartRecoverySteeringBlockReason(
@@ -585,7 +589,6 @@ it.each(dispatchCases)(
         getLifecycleGeneration: () => lifecycleGeneration,
         getParams: () => params,
         globalLane: "owner-dispatch-global",
-        sessionLane: "owner-dispatch-session",
         initialQueuedLifecycleGeneration: lifecycleGeneration,
         setLifecycleGeneration: (value) => {
           lifecycleGeneration = value;

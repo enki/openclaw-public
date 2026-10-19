@@ -16,6 +16,13 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import type { ReplyMessageInjectionOptions } from "../../sessions/session-controller.contracts.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import {
+  steerSessionControllerOperation,
+  type SessionControllerSteerResult,
+} from "../../sessions/session-controller.steer.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -23,14 +30,9 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds } from "../agent-scope.js";
-import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
-import {
-  type EmbeddedAgentQueueMessageOptions,
-  formatEmbeddedAgentQueueFailureSummary,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
-} from "../embedded-agent-runner/runs.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
@@ -49,6 +51,30 @@ import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steer
 export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
   request: Parameters<AgentToolGatewayRequestCaller>[0],
 ): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);
+
+export function buildSessionsSendAgentParams(params: {
+  message: string;
+  agentId: string;
+  sessionKey: string;
+  idempotencyKey: string;
+  nativeChild: boolean;
+  inputProvenance: InputProvenance;
+}) {
+  return {
+    message: params.message,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    idempotencyKey: params.idempotencyKey,
+    deliver: false,
+    // Native children return through their completion owner, without a message tool.
+    sourceReplyDeliveryMode: params.nativeChild
+      ? ("automatic" as const)
+      : ("message_tool_only" as const),
+    channel: INTERNAL_MESSAGE_CHANNEL,
+    lane: resolveNestedAgentLaneForSession(params.sessionKey),
+    inputProvenance: params.inputProvenance,
+  };
+}
 
 export async function notifySessionsSendSession(params: {
   message: string;
@@ -129,9 +155,9 @@ type SessionsSendDeliveryParams = {
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
-  /** Returned input can retain its exact recipient generation through consumption. */
+  /** Returned input retains the exact recipient generation through consumption. */
   recipientGeneration?: { assertCurrent: () => void; release: () => void };
-  /** Original visible input when model-facing steering includes runtime instructions. */
+  /** Visible source input when model-facing steering includes runtime instructions. */
   transcriptText?: string;
   onQueueAccepted?: (accepted: boolean) => void;
   assertDispatchCurrent?: () => void;
@@ -157,6 +183,11 @@ export type SessionsSendStart =
     }
   | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
 
+/** Rejections that leave a Cron run-scoped target to its durable parent session. */
+const FALLBACK_STEER_REJECTIONS = new Set<
+  Extract<SessionControllerSteerResult, { status: "rejected" }>["reason"]
+>(["no_active_run", "not_running", "stale_run", "injection_unavailable"]);
+
 /** Decide steering before preparing custody for a new turn. */
 export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
@@ -167,10 +198,18 @@ export async function trySessionsSendActiveRunDelivery(
     const selection = resolveGatewayToolOperatorSelection();
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
-    const activeRunSessionId =
+    const activeOperation =
       params.mode === "steer" || params.allowActiveRunQueueDelivery
-        ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
+        ? getSessionControllerOperation(
+            params.sessionStoreTarget.canonicalKey,
+            captureSessionTarget({
+              storeScope: params.sessionStoreTarget.storePath,
+              sessionKey: params.sessionStoreTarget.canonicalKey,
+              agentId: params.sessionStoreTarget.agentId,
+            }),
+          )
         : undefined;
+    const activeRunSessionId = activeOperation?.sessionId;
     if (params.mode === "steer" && !activeRunSessionId) {
       throw new Error(
         "Target has no active run that accepts steering. Use mode=followup to start a new turn.",
@@ -185,13 +224,10 @@ export async function trySessionsSendActiveRunDelivery(
       throw new Error("active run session incarnation changed");
     }
     const { inputProvenance, message: messageText } = params.sendParams;
-    if (activeRunSessionId && messageText) {
+    if (activeOperation && activeRunSessionId && messageText) {
       const queue = async (
         assertCurrent: () => void,
-        lifecycle: Pick<
-          EmbeddedAgentQueueMessageOptions,
-          "onQueueAccepted" | "onQueueSettled"
-        > = {},
+        lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
       ) => {
         let accepted = false;
         const assertInputCurrent = () => {
@@ -201,11 +237,21 @@ export async function trySessionsSendActiveRunDelivery(
             params.assertSendCurrent?.();
           }
         };
-        const queueOptions: EmbeddedAgentQueueMessageOptions = {
+        const guarded = Boolean(
+          selection.operatorAuthority || assertCaller || params.assertSendCurrent,
+        );
+        assertInputCurrent();
+        const queueOptions: ReplyMessageInjectionOptions = {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
           ...lifecycle,
+          onQueueAccepted: (value) => {
+            // Accepted guidance belongs to the receiver, not the sender's later policy.
+            accepted ||= value;
+            params.onQueueAccepted?.(value);
+            lifecycle.onQueueAccepted?.(value);
+          },
           ...(params.recipientGeneration
             ? {
                 onQueueSettled: () => {
@@ -214,13 +260,14 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               }
             : {}),
-          ...(params.assertSendCurrent || params.onQueueAccepted
+          // Source-bound authority admits only guarded (V2) injection.
+          ...(guarded
             ? {
-                onQueueAccepted: (value: boolean) => {
-                  // The receiving queue owns accepted input, not the sender's later policy.
-                  accepted ||= value;
-                  params.onQueueAccepted?.(value);
-                  lifecycle.onQueueAccepted?.(value);
+                assertCurrent: () => {
+                  assertInputCurrent();
+                  if (!selection.operatorAuthority) {
+                    assertCaller?.("agent");
+                  }
                 },
               }
             : {}),
@@ -246,50 +293,47 @@ export async function trySessionsSendActiveRunDelivery(
             },
           }),
         };
-        const dispatchQueue = (options: EmbeddedAgentQueueMessageOptions) =>
-          selection.operatorAuthority || assertCaller || params.assertSendCurrent
-            ? queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
-                activeRunSessionId,
-                messageText,
-                options,
-                () => {
-                  assertInputCurrent();
-                  if (!selection.operatorAuthority) {
-                    assertCaller?.("agent");
-                  }
-                  return true;
-                },
-              )
-            : queueEmbeddedAgentMessageWithOutcomeAsync(activeRunSessionId, messageText, options);
-        assertInputCurrent();
+        const dispatchQueue = (options: ReplyMessageInjectionOptions) =>
+          steerSessionControllerOperation({
+            operation: activeOperation,
+            text: messageText,
+            // A status-only inter-session input cannot abort the receiving turn.
+            abortOnUnconfirmedTranscript: false,
+            options,
+          });
         return await dispatchQueue(queueOptions);
       };
-      const queueOutcome = selection.operatorAuthority
+      const steer = selection.operatorAuthority
         ? await queueSessionsSendSteeringWithCustody(
-            { sessionKey: params.sessionKey, agentId: params.sendParams.agentId },
+            {
+              sessionKey: params.sessionKey,
+              sessionId: activeRunSessionId,
+              agentId: params.sendParams.agentId,
+            },
+            activeOperation,
             selection.assertCurrent,
             queue,
           )
         : await queue(selection.assertCurrent);
-      if (queueOutcome.queued) {
+      if (steer.status === "accepted") {
         return {
           ok: true,
           runId: params.runId,
           targetDisposition: "steered",
-          steeredRunId: queueOutcome.runId,
+          steeredRunId: steer.targetRunId,
         };
       }
-      // Ordinary messages can retain their original same-session
-      // followup path when the active runtime cannot steer. Authority refusals
-      // and ambiguous backend failures remain errors, never fallback admission.
+      if (steer.status === "indeterminate") {
+        // Consumed without a confirmed commit: never replay it as a new turn.
+        throw new Error(steer.errorMessage);
+      }
+      // A definite capability refusal leaves ordinary input on its captured
+      // conversation. Authority failures and uncertain native commitment never retry.
       if (
         params.mode !== "steer" &&
         params.allowActiveRunQueueDelivery &&
         !isCronRunSessionKey(params.sessionKey) &&
-        (queueOutcome.reason === "not_streaming" ||
-          queueOutcome.reason === "no_active_run" ||
-          queueOutcome.reason === "stale_run" ||
-          queueOutcome.reason === "compacting")
+        FALLBACK_STEER_REJECTIONS.has(steer.reason)
       ) {
         return {};
       }
@@ -299,13 +343,11 @@ export async function trySessionsSendActiveRunDelivery(
       if (
         params.mode === "steer" ||
         (!ownChild && (params.expectedSessionId || !fallbackSessionKey)) ||
-        (!ownChild &&
-          queueOutcome.reason !== "not_streaming" &&
-          queueOutcome.reason !== "no_active_run" &&
-          queueOutcome.reason !== "stale_run")
+        (!ownChild && !FALLBACK_STEER_REJECTIONS.has(steer.reason))
       ) {
+        const errorPart = steer.errorMessage ? ` error=${steer.errorMessage}` : "";
         throw new Error(
-          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected",
+          `queue_message_failed reason=${steer.reason} sessionId=${activeRunSessionId} gatewayHealth=live${errorPart}`,
         );
       }
     }

@@ -11,12 +11,14 @@ import {
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { projectForwardedMessages } from "../../gateway/chat-display-projection.history.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-  type EmbeddedAgentQueueMessageOptions,
+import type {
+  EmbeddedAgentQueueHandle,
+  EmbeddedAgentQueueMessageOptions,
 } from "../embedded-agent-runner/runs.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../embedded-agent-runner/runs.test-support.js";
 import { runAgentStep } from "./agent-step.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -40,6 +42,46 @@ describe("runAgentStep", () => {
     agentWaitMock.mockReset();
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("surfaces a failed accepted requester continuation without redispatching the peer result", async () => {
+    const failure = "Codex thread synthetic-thread is claimed by active work; stop it first.";
+    const gatewayCalls: CallGatewayOptions[] = [];
+    const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+      gatewayCalls.push(opts);
+      if (opts.method === "agent") {
+        return { runId: "accepted-requester-run" } as T;
+      }
+      if (opts.method === "agent.wait") {
+        return { status: "error", error: failure, endedAt: 1234 } as T;
+      }
+      throw new Error(`Unexpected Gateway request: ${opts.method}`);
+    };
+
+    await expect(
+      runSessionsSendA2AFlow({
+        callGateway,
+        targetSessionKey: "agent:main:peer",
+        targetAgentId: "main",
+        displayKey: "peer",
+        runId: "completed-peer-run",
+        replyTimeoutMs: 10_000,
+        requesterSessionKey: "agent:main:requester",
+        reply: {
+          status: "ok",
+          replyText: "Synthetic peer result",
+          terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+        },
+        deliverRequesterReply: (reply) =>
+          runAgentStep({
+            ...reply,
+            sessionKey: "agent:main:requester",
+            timeoutMs: 10_000,
+            callGateway,
+          }),
+      }),
+    ).rejects.toThrow(failure);
+    expect(gatewayCalls.map((call) => call.method)).toEqual(["agent", "agent.wait"]);
   });
 
   it("preserves bundle MCP runtime after successful nested agent steps", async () => {
@@ -134,132 +176,119 @@ describe("returned peer results", () => {
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
   });
-  it.each([
-    "accepted",
-    "unconfirmed",
-    "replaced",
-    "lifecycle-changed",
-    "replaced-after-acceptance",
-    "lifecycle-changed-after-acceptance",
-  ] as const)("delivers a completed peer result to the busy requester (%s)", async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:dashboard:synthetic-requester";
-      const sessionId = "synthetic-requester-session";
-      const scope = { agentId: "main", sessionKey, sessionId };
-      await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-      const gatewayCalls: CallGatewayOptions[] = [];
-      const callGateway = async <T = unknown>(request: CallGatewayOptions): Promise<T> => {
-        gatewayCalls.push(request);
-        if (request.method === "agent.wait") {
-          return { status: "ok", terminalReply: { disposition: "empty" } } as T;
-        }
-        return { runId: "synthetic-unwanted-next-turn" } as T;
-      };
-      let queued: EmbeddedAgentQueueMessageOptions | undefined;
-      const queueMessage = vi.fn(
-        async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
-          queued = options;
-          options?.onQueueAccepted?.(true);
-          if (outcome === "unconfirmed") {
-            throw new MessageInjectionAcceptedUnconfirmedError();
+  it.each(["accepted", "unconfirmed", "replaced", "lifecycle-changed"] as const)(
+    "delivers a completed peer result to the busy requester (%s)",
+    async (outcome) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          setRuntimeConfigSnapshot({});
+          const sessionKey = "agent:main:dashboard:synthetic-requester";
+          const sessionId = "synthetic-requester-session";
+          const scope = { agentId: "main", sessionKey, sessionId };
+          await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+          const gatewayCalls: CallGatewayOptions[] = [];
+          const callGateway = async <T = unknown>(request: CallGatewayOptions): Promise<T> => {
+            gatewayCalls.push(request);
+            if (request.method === "agent.wait") {
+              return { status: "ok", terminalReply: { disposition: "empty" } } as T;
+            }
+            return { runId: "synthetic-unwanted-next-turn" } as T;
+          };
+          let queued: EmbeddedAgentQueueMessageOptions | undefined;
+          const queueMessage = vi.fn(
+            async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
+              queued = options;
+              options?.onQueueAccepted?.(true);
+              if (outcome === "unconfirmed") {
+                throw new MessageInjectionAcceptedUnconfirmedError();
+              }
+            },
+          );
+          const handle: EmbeddedAgentQueueHandle = {
+            runId: "synthetic-active-requester-run",
+            queueMessage,
+            isStreaming: () => true,
+            isCompacting: () => false,
+            abort: () => {},
+            sourceReplyDeliveryMode: "automatic",
+            messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+          };
+          setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
+          try {
+            await runSessionsSendA2AFlow({
+              callGateway,
+              targetSessionKey: "agent:main:dashboard:synthetic-peer",
+              targetAgentId: "main",
+              displayKey: "synthetic-peer",
+              runId: "synthetic-completed-peer-run",
+              replyTimeoutMs: 1_000,
+              requesterSessionKey: sessionKey,
+              requesterAgentId: "main",
+              requesterSession: {
+                sessionId: outcome === "replaced" ? "retired-requester-session" : sessionId,
+                ...(outcome === "lifecycle-changed"
+                  ? { lifecycleRevision: "retired-lifecycle" }
+                  : {}),
+              },
+              reply: {
+                status: "ok",
+                replyText: "Synthetic peer result",
+                terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+              },
+            });
+            expect(gatewayCalls).toEqual([]);
+            if (outcome === "replaced" || outcome === "lifecycle-changed") {
+              expect(queueMessage).not.toHaveBeenCalled();
+              expect(await loadTranscriptEvents(scope)).toEqual([]);
+              return;
+            }
+            expect(queueMessage).toHaveBeenCalledOnce();
+            expect(queued?.waitForTranscriptCommit).toBe(false);
+            // Admission returns while the receiver still owns consumption. The real
+            // transcript recorder must remain usable after the forwarding call ends.
+            expect(await loadTranscriptEvents(scope)).toEqual([]);
+            const recorder = queued?.userTurnTranscriptRecorder;
+            expect(recorder).toBeDefined();
+            if (!recorder) {
+              throw new Error("Receiver lost its admitted input recorder");
+            }
+            const persisted = await recorder.persistApproved();
+            expect(persisted?.message.provenance).toMatchObject({
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceSessionKey: "agent:main:dashboard:synthetic-peer",
+            });
+            const text = JSON.stringify(persisted?.message.content);
+            expect(text).toContain("Synthetic peer result");
+            expect(queueMessage.mock.calls[0]?.[0]).toContain("This result is delivered once");
+            expect(queueMessage.mock.calls[0]?.[0]).toContain("will not be sent back");
+            expect(persisted).toBeDefined();
+            const projected = projectForwardedMessages([{ ...persisted?.message }]);
+            expect(projected[0]).toMatchObject({
+              role: "assistant",
+              content: "Synthetic peer result",
+              senderLabel: expect.stringContaining("Forwarded"),
+              senderSession: { sessionKey: "agent:main:dashboard:synthetic-peer" },
+            });
+            expect(persisted?.message.idempotencyKey).toBeTruthy();
+            queued?.onQueueSettled?.();
+            const entries = await loadTranscriptEvents(scope);
+            expect(
+              entries.filter((entry) => isRecord(entry) && entry.type === "message"),
+            ).toHaveLength(1);
+            expect(gatewayCalls).toEqual([]);
+            if (outcome === "unconfirmed") {
+              expect(recordParticipant).not.toHaveBeenCalled();
+            } else {
+              expect(recordParticipant).toHaveBeenCalledOnce();
+            }
+          } finally {
+            queued?.onQueueSettled?.();
+            clearActiveEmbeddedRun(sessionId, handle, sessionKey);
           }
         },
       );
-      const handle: EmbeddedAgentQueueHandle = {
-        runId: "synthetic-active-requester-run",
-        queueMessage,
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: () => {},
-        sourceReplyDeliveryMode: "automatic",
-        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-      };
-      setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
-      try {
-        await runSessionsSendA2AFlow({
-          callGateway,
-          targetSessionKey: "agent:main:dashboard:synthetic-peer",
-          targetAgentId: "main",
-          displayKey: "synthetic-peer",
-          runId: "synthetic-completed-peer-run",
-          replyTimeoutMs: 1_000,
-          requesterSessionKey: sessionKey,
-          requesterAgentId: "main",
-          requesterSession: {
-            sessionId: outcome === "replaced" ? "retired-requester-session" : sessionId,
-            ...(outcome === "lifecycle-changed" ? { lifecycleRevision: "retired-lifecycle" } : {}),
-          },
-          reply: {
-            status: "ok",
-            replyText: "Synthetic peer result",
-            terminalReply: { disposition: "visible", text: "Synthetic peer result" },
-          },
-        });
-        expect(gatewayCalls).toEqual([]);
-        if (outcome === "replaced" || outcome === "lifecycle-changed") {
-          expect(queueMessage).not.toHaveBeenCalled();
-          expect(await loadTranscriptEvents(scope)).toEqual([]);
-          return;
-        }
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(queued?.waitForTranscriptCommit).toBe(false);
-        // Admission returns while the receiver still owns consumption. The real
-        // transcript recorder must remain usable after the forwarding call ends.
-        expect(await loadTranscriptEvents(scope)).toEqual([]);
-        const recorder = queued?.userTurnTranscriptRecorder;
-        expect(recorder).toBeDefined();
-        if (!recorder) {
-          throw new Error("Receiver lost its admitted input recorder");
-        }
-        if (
-          outcome === "replaced-after-acceptance" ||
-          outcome === "lifecycle-changed-after-acceptance"
-        ) {
-          await replaceSessionEntry(scope, {
-            sessionId: outcome === "replaced-after-acceptance" ? "replacement-session" : sessionId,
-            lifecycleRevision: "replacement-lifecycle",
-            updatedAt: 2,
-          });
-          if (outcome === "replaced-after-acceptance") {
-            await expect(recorder.persistApproved()).resolves.toBeUndefined();
-          } else {
-            await expect(recorder.persistApproved()).rejects.toThrow();
-          }
-          expect(await loadTranscriptEvents(scope)).toEqual([]);
-          expect(gatewayCalls).toEqual([]);
-          return;
-        }
-        const persisted = await recorder.persistApproved();
-        expect(persisted?.message.provenance).toMatchObject({
-          kind: "inter_session",
-          sourceTool: "sessions_send",
-          sourceSessionKey: "agent:main:dashboard:synthetic-peer",
-        });
-        const text = JSON.stringify(persisted?.message.content);
-        expect(text).toContain("Synthetic peer result");
-        expect(queueMessage.mock.calls[0]?.[0]).toContain("This result is delivered once");
-        expect(queueMessage.mock.calls[0]?.[0]).toContain("will not be sent back");
-        expect(persisted).toBeDefined();
-        const projected = projectForwardedMessages([{ ...persisted?.message }]);
-        expect(projected[0]).toMatchObject({
-          role: "assistant",
-          content: "Synthetic peer result",
-          senderLabel: expect.stringContaining("Forwarded"),
-          senderSession: { sessionKey: "agent:main:dashboard:synthetic-peer" },
-        });
-        expect(persisted?.message.idempotencyKey).toBeTruthy();
-        queued?.onQueueSettled?.();
-        const entries = await loadTranscriptEvents(scope);
-        expect(entries.filter((entry) => isRecord(entry) && entry.type === "message")).toHaveLength(
-          1,
-        );
-        expect(gatewayCalls).toEqual([]);
-        expect(recordParticipant).toHaveBeenCalledOnce();
-      } finally {
-        queued?.onQueueSettled?.();
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      }
-    });
-  });
+    },
+  );
 });

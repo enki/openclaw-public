@@ -33,11 +33,11 @@ import { waitForSessionParticipantRecording } from "../sessions/session-particip
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/runs.js";
 import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
-import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing as embeddedRunsTesting,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -70,13 +70,20 @@ afterEach(() => {
 });
 
 it.each([
-  { supportsTranscriptCommitWait: false },
-  { supportsTranscriptCommitWait: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
+  {},
+  { mode: "steer" as const, alternateStore: true },
+  { mode: "steer" as const, hiddenRun: true },
 ])(
-  "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
-  async ({ supportsTranscriptCommitWait, mode, alternateStore, hiddenRun }) => {
+  "sessions_send persists steered provenance with mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
+  async ({
+    mode,
+    alternateStore,
+    hiddenRun,
+  }: {
+    mode?: "steer";
+    alternateStore?: boolean;
+    hiddenRun?: boolean;
+  }) => {
     const runId = "hidden-sessions-send-steering-run";
     const runScopedCallerKey =
       mode === "steer"
@@ -150,11 +157,16 @@ it.each([
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           isStreaming: () => true,
           isCompacting: () => false,
-          supportsTranscriptCommitWait,
+          supportsTranscriptCommitWait: true,
           sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
           abort: () => {},
         },
         runScopedCallerKey,
+        undefined,
+        scope.agentId,
+        undefined,
+        undefined,
+        { storeScope: scope.storePath },
       );
       if (hiddenRun) {
         registerAgentRunContext(runId, {
@@ -185,9 +197,7 @@ it.each([
         },
       });
 
-      if (mode === "steer") {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const send = tool.execute("call-run-scoped-caller", {
         mode,
         sessionKey: runScopedCallerKey,
@@ -197,21 +207,17 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
-      // Acceptance must return while the recipient response remains held.
+      // The active response is still held: accepted guidance in either mode
+      // must survive the unrelated reply-wait deadline before receiver consumption.
+      await vi.advanceTimersByTimeAsync(30_000);
+      vi.useRealTimers();
       expect((await send).details).toMatchObject({ status: "accepted" });
-      if (mode === "steer") {
-        // The active response is still held: an admission-only send must not
-        // withdraw guidance when the unrelated reply-wait deadline expires.
-        await vi.advanceTimersByTimeAsync(30_000);
-        vi.useRealTimers();
-        expect((await send).details).toMatchObject({ status: "accepted" });
-        expect(session.pendingMessageCount).toBe(1);
-        expect(
-          SessionManager.open(scope, dir)
-            .getEntries()
-            .filter((entry) => entry.type === "message" && entry.message.role === "user"),
-        ).toHaveLength(1);
-      }
+      expect(session.pendingMessageCount).toBe(1);
+      expect(
+        SessionManager.open(scope, dir)
+          .getEntries()
+          .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toHaveLength(1);
       finishInitialResponse?.();
       const [result] = await Promise.all([send, prompt]);
 
@@ -223,6 +229,7 @@ it.each([
       });
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
+      expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = SessionManager.open(scope, dir).getEntries();
       expect(

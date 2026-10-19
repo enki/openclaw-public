@@ -1,16 +1,15 @@
 import crypto from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
@@ -48,7 +47,7 @@ export async function runAgentStep(params: {
   };
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   let steered = false;
-  if (params.sourceRole !== "subagent" && resolveActiveEmbeddedRunSessionId(params.sessionKey)) {
+  if (params.sourceRole !== "subagent" && isSessionRunActiveForKey(params.sessionKey)) {
     const cfg = getRuntimeConfig();
     const agentId =
       params.agentId ?? resolveSessionAgentId({ config: cfg, sessionKey: params.sessionKey });
@@ -103,8 +102,8 @@ export async function runAgentStep(params: {
       );
       if ("ok" in result) {
         if (!result.ok) {
-          const error = asOptionalRecord(result.result.details)?.error;
-          throw new Error(typeof error === "string" ? error : "Requester result steering failed.");
+          const details = result.result.details as { error?: string };
+          throw new Error(details.error ?? "Requester result steering failed.");
         }
         steered = result.targetDisposition === "steered";
         accepted ||= steered;
@@ -161,10 +160,13 @@ export async function runAgentStep(params: {
   }
   const resolvedRunId =
     typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
-  await waitForAgentRunReply({
+  const result = await waitForAgentRunReply({
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
     untilTerminal: true,
   });
+  if (result.status !== "ok") {
+    throw new Error(result.error ?? `Requester continuation ended with ${result.status}.`);
+  }
 }

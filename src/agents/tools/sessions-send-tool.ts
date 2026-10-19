@@ -12,6 +12,12 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import {
+  logSessionOwnershipLookupFailure,
+  lookupFailedDenialMessage,
+  lookupFailedOperationMessage,
+  sessionOwnershipLookupFailure,
+} from "../../plugin-sdk/session-visibility-internal.js";
+import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -21,10 +27,8 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
@@ -56,7 +60,7 @@ import {
 } from "./sessions-placement-tool-contract.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
-import { sendFailure, sendOwnershipLookupFailure } from "./sessions-send-helpers.js";
+import { sendFailure } from "./sessions-send-helpers.js";
 import {
   finishSessionsSendReply,
   prepareSessionsSendReplyContext,
@@ -67,6 +71,7 @@ import {
   withSessionsSendRequesterSource,
 } from "./sessions-send-session-source.js";
 import {
+  buildSessionsSendAgentParams,
   callSessionsSendGateway,
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
@@ -203,10 +208,17 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
           if (!isExpectedSessionLookupMiss(err)) {
-            return sendOwnershipLookupFailure(err, {
+            const failure = sessionOwnershipLookupFailure(err);
+            logSessionOwnershipLookupFailure({
               requesterSessionKey: effectiveRequesterKey,
-              restrictToSpawned,
+              failure,
             });
+            return sendFailure(
+              restrictToSpawned ? "forbidden" : "error",
+              restrictToSpawned
+                ? lookupFailedDenialMessage("send", failure.kind)
+                : lookupFailedOperationMessage("send", failure.kind),
+            );
           }
         }
 
@@ -446,10 +458,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
-          if (
-            visibleSession.missing &&
-            (mode === "steer" || mode === "notify" || mode === "resume")
-          ) {
+          if (visibleSession.missing && mode !== undefined && mode !== "followup") {
             return sendFailure(
               "error",
               "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
@@ -566,21 +575,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 assertCurrent: communication.assertCurrent,
               });
             }
-            const sendParams = {
+            const sendParams = buildSessionsSendAgentParams({
               message: dispatchMessage,
               agentId: targetAgentId,
               sessionKey: resolvedKey,
               idempotencyKey,
-              deliver: false,
-              // Native children return through their completion owner, without a message tool.
-              sourceReplyDeliveryMode:
-                targetIsSubagent && !targetAcpMeta
-                  ? ("automatic" as const)
-                  : ("message_tool_only" as const),
-              channel: INTERNAL_MESSAGE_CHANNEL,
-              lane: resolveNestedAgentLaneForSession(resolvedKey),
+              nativeChild: targetIsSubagent && !targetAcpMeta,
               inputProvenance,
-            };
+            });
             if (
               mode === "resume" ||
               (mode === undefined &&
