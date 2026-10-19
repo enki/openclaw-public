@@ -302,6 +302,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
           onUnqualifiedModelCancelled: connection.abortExplicitly,
           requesterSessionKey: params.sessionKey,
+          requesterStorePath: storePath,
           requesterTurnRunId: params.runId,
           requestCustody,
           completionScope: params.agentHarnessCompletionScope,

@@ -2348,6 +2348,16 @@ export const en: TranslationMap & {
     subagentSessionDisabled: "Continue in {parent}.",
     processesPanel: { title: "Processes", refresh: "Refresh processes" },
     subagentsPanel: {
+      nativeTitle: "Live native agents",
+      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
+      nativeEmpty: "No native agents are currently observed.",
+      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeStatus: {
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        interrupted: "Interrupted",
+      },
       title: "Subagents",
       back: "Back to Subagents",
       running: "Running ({count})",

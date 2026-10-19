@@ -1,4 +1,4 @@
-import { Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
@@ -115,9 +115,45 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 </button>
               </div>
             )}
+            <Show when={data().nativeSnapshot || data().nativeError}>
+              <section
+                class="chat-subagents__native"
+                aria-label={t("chat.subagentsPanel.nativeTitle")}
+              >
+                <h3>{t("chat.subagentsPanel.nativeTitle")}</h3>
+                <p class="muted">{t("chat.subagentsPanel.nativeCoverage")}</p>
+                <Show when={data().nativeError}>
+                  <div class="chat-subagents__error" role="alert">
+                    {data().nativeError}
+                  </div>
+                </Show>
+                <div role="list">
+                  <For each={data().nativeRows} keyed={(row) => row.id}>
+                    {(row) => (
+                      <div class="chat-subagents__item" role="listitem">
+                        <div class="chat-subagents__item-heading">
+                          <span class="chat-subagents__activity">{row().label}</span>
+                        </div>
+                        <div class="chat-subagents__metadata">
+                          <span>{t(`chat.subagentsPanel.nativeStatus.${row().status}`)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                </div>
+                <Show when={data().nativeSnapshot && !data().nativeRows.length}>
+                  <p class="muted">{t("chat.subagentsPanel.nativeEmpty")}</p>
+                </Show>
+                <Show when={data().nativeSnapshot?.truncated}>
+                  <p class="muted">{t("chat.subagentsPanel.nativeTruncated")}</p>
+                </Show>
+              </section>
+            </Show>
             <Show
               when={data().rows.length}
               fallback={
+                !data().nativeSnapshot &&
+                !data().nativeError &&
                 (data().loading || (data().hasResult && !data().error)) && (
                   <div class="chat-subagents__empty" role="status">
                     {t(data().loading ? "common.loading" : "chat.subagentsPanel.empty")}
