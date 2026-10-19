@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
@@ -46,6 +47,7 @@ import {
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import type { SessionSendReplyAdmission } from "./sessions-send-communication.js";
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
 
 // Bind at dispatch: child followup custody installs its context after tool construction.
@@ -162,12 +164,15 @@ type SessionsSendDeliveryParams = {
   /** Visible source input when model-facing steering includes runtime instructions. */
   transcriptText?: string;
   onQueueAccepted?: (accepted: boolean) => void;
+  captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
   assertSendCurrent?: () => void;
   sourceOrigin?: DeliveryContext;
   /** A Cron fallback is another exact recipient and needs its own admission. */
   prepareFallback?: (sessionKey: string) => Promise<{
+    targetSession?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+    captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
     callGateway: AgentToolGatewayRequestCaller;
     assertCurrent: () => void;
     close: () => void;
@@ -182,6 +187,8 @@ export type SessionsSendStart =
       targetDisposition: "queued" | "steered";
       steeredRunId?: string;
       a2aSessionKey?: string;
+      a2aSession?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+      replyAdmission?: SessionSendReplyAdmission;
     }
   | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
 
@@ -492,7 +499,12 @@ export async function startSessionsSendAgentRun(
       ok: true,
       runId: responseRunId,
       targetDisposition: "queued",
-      ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
+      replyAdmission: params.retainAcceptance
+        ? undefined
+        : (fallback?.captureReplyAdmission ?? params.captureReplyAdmission)?.(responseRunId),
+      ...(fallbackSessionKey
+        ? { a2aSessionKey: fallbackSessionKey, a2aSession: fallback?.targetSession }
+        : {}),
     };
   } catch (err) {
     return deliveryFailure(params, err);

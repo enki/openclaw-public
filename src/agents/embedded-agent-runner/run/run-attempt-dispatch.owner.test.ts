@@ -225,6 +225,7 @@ const dispatchCases: DispatchCase[] = [
     retryCount: 1,
   },
   {
+    agentId: "main",
     sandboxSessionKey: "agent:main:policy",
     oneShotCliRun: false,
     legacyRetryCount: 3,

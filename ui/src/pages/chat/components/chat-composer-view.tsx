@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
@@ -12,6 +13,7 @@ import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -53,8 +55,10 @@ export function renderChatComposerView(
   props: ChatComposerProps,
   state: ChatComposerState,
 ) {
+  const footerControl = createFooterControlRef();
   const ComposerTextarea = (view: ComposerTextareaProps) =>
     renderComposerTextarea(context, props, state, view);
+  const inputHandle = createChatAttachmentInputHandle();
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -233,7 +237,7 @@ export function renderChatComposerView(
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
-    <div class="agent-chat__composer-shell">
+    <div ref={footerControl} class="agent-chat__composer-shell">
       <div class="chat-footer__context">
         {props.footerContent}
         <div class="agent-chat__composer-notices">
@@ -408,6 +412,7 @@ export function renderChatComposerView(
               <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
+                inputHandle={inputHandle}
                 disabled={!context().canCompose}
                 cameraActive={context().showComposer && props.cameraActive !== false}
               />
@@ -515,6 +520,7 @@ export function renderChatComposerView(
                 <ChatComposerPlusMenu
                   menu={{
                     attachments: props,
+                    inputHandle,
                     capabilityMenu: props.capabilityMenu,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
