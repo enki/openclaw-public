@@ -89,10 +89,11 @@ export async function resolveRestartRecoveryDispatchTarget(
   }
 }
 
-/** Captures the durable continuation that a completed requester turn yielded to. */
+/** Recovery needs owed completion; Stop must also retire an already-canceled child's pending wake. */
 export function captureYieldedMainSessionContinuation(params: {
   entry: SessionEntry;
   requester: RestartRecoveryDispatchTarget | undefined;
+  purpose: "recovery" | "stop";
 }): (() => boolean) | undefined {
   // A prepared final may not have reached its queue yet; main recovery still owns that debt.
   if (
@@ -113,7 +114,7 @@ export function captureYieldedMainSessionContinuation(params: {
   const owner = listRuns().find(
     (run) =>
       !run.collect &&
-      owesRequesterCompletion(run) &&
+      (params.purpose === "stop" || owesRequesterCompletion(run)) &&
       !run.requesterTurnRunId &&
       run.requesterSettleWake?.requesterYieldBatch === true &&
       run.requesterSettleWake.rearmGeneration !== undefined &&
@@ -128,7 +129,7 @@ export function captureYieldedMainSessionContinuation(params: {
   const rearmGeneration = wake?.rearmGeneration;
   return () =>
     listRuns().includes(owner) &&
-    owesRequesterCompletion(owner) &&
+    (params.purpose === "stop" || owesRequesterCompletion(owner)) &&
     !owner.requesterTurnRunId &&
     owner.requesterSettleWake === wake &&
     wake?.rearmGeneration === rearmGeneration;

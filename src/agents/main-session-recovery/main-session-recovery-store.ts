@@ -188,6 +188,7 @@ export async function commitMainSessionRecovery(params: {
       ) {
         yieldedContinuation = captureYieldedMainSessionContinuation({
           entry,
+          purpose: "recovery",
           requester: resolveRestartRecoveryDispatchIdentity({
             storeAgentId: params.target.agentId,
             sessionKey: candidate.sessionKey,
