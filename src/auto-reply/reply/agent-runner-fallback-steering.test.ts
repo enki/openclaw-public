@@ -14,6 +14,7 @@ import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import * as followupRunner from "./followup-runner.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
 import { getFollowupQueueDepth, type FollowupRun } from "./queue.js";
@@ -30,6 +31,34 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+type ReplyParams = Parameters<typeof runReplyAgent>[0];
+
+function steer(run: FollowupRun, key: string, overrides: Partial<ReplyParams>) {
+  return runReplyAgent(
+    createReplyParams(run, {
+      transcriptCommandBody: undefined,
+      queueKey: key,
+      resolvedQueue: { mode: "steer", debounceMs: 0 },
+      shouldSteer: true,
+      isActive: true,
+      sessionKey: key,
+      defaultModel: "gpt-test",
+      resolvedBlockStreamingBreak: "text_end",
+      ...overrides,
+    }),
+  );
+}
+
+function operator(run: FollowupRun, profileId: string, assertCurrent = () => {}) {
+  return createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.read", "operator.write"],
+    gatewayAccessGrant: null,
+    modelPolicy: prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} }),
+    assertCurrent,
+  });
+}
 
 describe("ordinary steering into automatic model fallback", () => {
   it.each([
@@ -51,16 +80,10 @@ describe("ordinary steering into automatic model fallback", () => {
       run.run.agentId = "main";
       run.run.sessionKey = key;
       let callerCurrent = true;
-      run.operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "incoming-user",
-        scopes: ["operator.read", "operator.write"],
-        gatewayAccessGrant: null,
-        modelPolicy: prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} }),
-        assertCurrent() {
-          if (!callerCurrent) {
-            throw new Error("incoming caller revoked");
-          }
-        },
+      run.operatorAuthority = operator(run, "incoming-user", () => {
+        if (!callerCurrent) {
+          throw new Error("incoming caller revoked");
+        }
       });
       run.run.clientCaps = ["ui-commands"];
       const operation = createReplyOperation({
@@ -74,13 +97,15 @@ describe("ordinary steering into automatic model fallback", () => {
       run.run.gatewayUiCommandTarget = { connId: "new-tab", profileId: "incoming-user" };
       const injected = vi.fn(async () => {});
       const replacementInjected = vi.fn(async () => {});
-      if (!holdBackend) {
+      const attach = (queueMessage: () => Promise<void>) =>
         operation.attachBackend({
           kind: "embedded",
           terminalReplyExpectation: "result-required",
           cancel() {},
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
         });
+      if (!holdBackend) {
+        attach(injected);
       }
       operation.setPhase("running");
       const entered = createDeferred();
@@ -94,9 +119,7 @@ describe("ordinary steering into automatic model fallback", () => {
         });
       }
       const delivered = createDeferred<FollowupRun>();
-      const consumeFollowup = vi.fn(async (queued: FollowupRun) => {
-        delivered.resolve(queued);
-      });
+      const consumeFollowup = vi.fn(async (queued: FollowupRun) => delivered.resolve(queued));
       vi.spyOn(followupRunner, "createFollowupRunner").mockReturnValue(async (queued) => {
         // Follow-up admission owns execution ordering after a parked input settles.
         const admission = await admitReplyTurn({
@@ -108,12 +131,13 @@ describe("ordinary steering into automatic model fallback", () => {
           resetTriggered: false,
         });
         expect(admission.status).toBe("owned");
-        if (admission.status === "owned") {
-          try {
-            await consumeFollowup(queued);
-          } finally {
-            admission.operation.complete();
-          }
+        if (admission.status !== "owned") {
+          return;
+        }
+        try {
+          await consumeFollowup(queued);
+        } finally {
+          admission.operation.complete();
         }
       });
       const fingerprint = toolAuthority.prepareFollowupRunToolAuthorityFingerprint;
@@ -130,39 +154,14 @@ describe("ordinary steering into automatic model fallback", () => {
       );
       const resultState: ReplyOperationRunState = {};
       const typing = createMockTypingController();
-      const incoming = runReplyAgent({
-        commandBody: run.prompt,
-        followupRun: run,
+      const incoming = steer(run, key, {
         opts: { runId: key, [REPLY_OPERATION_RUN_STATE]: resultState },
-        queueKey: key,
-        resolvedQueue: { mode: "steer", debounceMs: 0 },
-        shouldSteer: true,
-        shouldFollowup: false,
-        isActive: true,
         typing,
-        sessionCtx: {},
-        sessionKey: key,
-        defaultModel: "gpt-test",
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "text_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "never",
       });
       try {
         await awaitGateBeforeSettlement(entered.promise, incoming, "Preparation was not held");
         if (replaceBackend) {
-          operation.attachBackend({
-            kind: "embedded",
-            terminalReplyExpectation: "result-required",
-            cancel() {},
-            messageInjectionV2: {
-              version: 2,
-              isAvailable: () => true,
-              queueMessage: replacementInjected,
-            },
-          });
+          attach(replacementInjected);
         } else if (aborted) {
           expect(operation.abortByUser()).toBe(true);
         } else {
@@ -234,35 +233,35 @@ describe("ordinary steering into automatic model fallback", () => {
     "hook-route",
     "transport-alias",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
-    const collaborative =
-      scenario === "collaborative-automatic" ||
-      scenario === "collaborative-pinned-selection" ||
-      scenario === "collaborative-locked-selection";
-    const explicitSteer =
-      scenario === "explicit-steer-same-requester" || scenario === "explicit-steer-cross-profile";
+    const collaborative = scenario.startsWith("collaborative-");
+    const explicitSteer = scenario.startsWith("explicit-steer-");
     const crossProfile =
       collaborative ||
-      scenario === "cross-profile" ||
-      scenario === "cross-profile-default" ||
-      scenario === "cross-profile-pending" ||
+      scenario.startsWith("cross-profile") ||
       scenario === "explicit-steer-cross-profile";
     const key = `agent:main:fallback-steering-${scenario}`;
     const run = createQueueTestRun({ prompt: "use the new requirements", messageId: scenario });
     run.run.agentId = "main";
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
+    const modelConfig = {
+      primary: "openai/gpt-test",
+      fallbacks: scenario === "policy-fallback" ? undefined : ["test-alias/test-model"],
+    };
     run.run.config = {
-      ...(scenario === "cross-profile-default"
-        ? {}
-        : { messages: { queue: { allowCollaborativeSteering: collaborative || explicitSteer } } }),
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-test",
-            ...(scenario === "policy-fallback" ? {} : { fallbacks: ["test-alias/test-model"] }),
-          },
-        },
-      },
+      messages:
+        scenario === "cross-profile-default"
+          ? undefined
+          : {
+              queue: { allowCollaborativeSteering: collaborative || explicitSteer },
+            },
+      agents: { defaults: { model: modelConfig } },
+    };
+    const alias = {
+      provider: "test-provider",
+      ...(scenario === "transport-alias"
+        ? { api: "openai-completions" as const, baseUrl: "https://example.invalid/v1" }
+        : {}),
     };
     const plugins = createPluginMetadataSnapshotFixture({
       plugins: [
@@ -270,16 +269,7 @@ describe("ordinary steering into automatic model fallback", () => {
           id: "test-provider",
           enabledByDefault: true,
           providers: ["test-provider"],
-          modelCatalog: {
-            aliases: {
-              "test-alias": {
-                provider: "test-provider",
-                ...(scenario === "transport-alias"
-                  ? { api: "openai-completions" as const, baseUrl: "https://example.invalid/v1" }
-                  : {}),
-              },
-            },
-          },
+          modelCatalog: { aliases: { "test-alias": alias } },
         },
       ],
     });
@@ -289,20 +279,11 @@ describe("ordinary steering into automatic model fallback", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
-    const modelPolicy = prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} });
-    const operator = (profileId: string) =>
-      createAdmittedRunOperatorAuthority({
-        profileId,
-        scopes: ["operator.read", "operator.write"],
-        gatewayAccessGrant: null,
-        modelPolicy,
-        assertCurrent() {},
-      });
     if (explicitSteer || collaborative) {
       run.run.conversationId = "shared-steering-chat";
     }
     if (crossProfile || explicitSteer || scenario.startsWith("same-profile")) {
-      run.operatorAuthority = operator("alice");
+      run.operatorAuthority = operator(run, "alice");
       Object.assign(run.run, {
         senderId: "alice-sender",
         senderName: "Alice",
@@ -376,19 +357,14 @@ describe("ordinary steering into automatic model fallback", () => {
             messageInjectionV2: {
               version: 2,
               isAvailable: () => true,
-              ...(scenario === "cross-profile-pending"
-                ? {
-                    claimPendingUserInputAnswer: async (
-                      text: string,
-                      _options: unknown,
-                      assertCurrent: () => void,
-                    ) => {
+              claimPendingUserInputAnswer:
+                scenario === "cross-profile-pending"
+                  ? async (text: string, _options: unknown, assertCurrent: () => void) => {
                       assertCurrent();
                       delivered.push(text);
                       return true;
-                    },
-                  }
-                : {}),
+                    }
+                  : undefined,
               queueMessage: async (text, _options, assertCurrent) => {
                 if (scenario === "cross-profile-pending") {
                   throw new Error(
@@ -409,14 +385,10 @@ describe("ordinary steering into automatic model fallback", () => {
       if (scenario === "new-selection") {
         run.run.provider = "test-provider";
         run.run.model = "test-model";
-      } else if (scenario === "pinned-selection" || scenario === "collaborative-pinned-selection") {
+      } else if (scenario.endsWith("pinned-selection")) {
         run.run.hasSessionModelOverride = true;
         run.run.modelOverrideSource = "user";
-      } else if (
-        scenario === "locked-selection" ||
-        scenario === "collaborative-locked-selection" ||
-        scenario === "cross-profile-pending"
-      ) {
+      } else if (scenario.endsWith("locked-selection") || scenario === "cross-profile-pending") {
         run.run.modelSelectionLocked = true;
       } else if (scenario === "changed-tools") {
         run.toolsAllow = ["read"];
@@ -455,23 +427,15 @@ describe("ordinary steering into automatic model fallback", () => {
         ).toBe(true);
       }
       if (crossProfile) {
-        run.operatorAuthority = operator("bob");
+        run.operatorAuthority = operator(run, "bob");
         Object.assign(run.run, {
           senderId: "bob-sender",
           senderName: "Bob",
           gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
         });
       }
-      const incoming = runReplyAgent({
-        commandBody: run.prompt,
-        followupRun: run,
+      const incoming = steer(run, key, {
         opts: { runId: scenario, [REPLY_OPERATION_RUN_STATE]: resultState },
-        queueKey: key,
-        resolvedQueue: { mode: "steer", debounceMs: 0 },
-        shouldSteer: true,
-        shouldFollowup: false,
-        isActive: true,
-        typing: createMockTypingController(),
         sessionCtx:
           explicitSteer || collaborative
             ? {
@@ -482,25 +446,15 @@ describe("ordinary steering into automatic model fallback", () => {
                 GatewayClientCaps: run.run.clientCaps,
                 GatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
                 // The command handler rewrites the prompt but retains the explicit turn facts.
-                ...(explicitSteer
-                  ? {
-                      CommandTurn: createCommandTurnContext("text", {
-                        authorized: true,
-                        commandName: "steer",
-                        body: `/steer ${run.prompt}`,
-                      }),
-                    }
-                  : {}),
+                CommandTurn: explicitSteer
+                  ? createCommandTurnContext("text", {
+                      authorized: true,
+                      commandName: "steer",
+                      body: `/steer ${run.prompt}`,
+                    })
+                  : undefined,
               }
             : {},
-        sessionKey: key,
-        defaultModel: "gpt-test",
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "text_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "never",
       });
       await incoming;
       expect(resultState.admission).toEqual(
