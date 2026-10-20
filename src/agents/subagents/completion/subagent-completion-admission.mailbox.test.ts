@@ -254,3 +254,92 @@ it.each(["owed", "killed", "suppressed", "retired during lookup"] as const)(
     );
   },
 );
+
+it.each([
+  "leader already retired",
+  "leader retires during lookup",
+  "whole batch retires during lookup",
+  "sibling replaced during lookup",
+] as const)("preserves mixed-cohort mailbox custody (%s)", async (scenario) => {
+  await withReservationState(
+    {
+      status: "dispatching",
+      attemptCount: 1,
+      rearmGeneration: 3,
+      requesterYieldBatch: true,
+      yieldedFinalDeliverable: true,
+      batchRunIds: ["completion-run", "surviving-sibling"],
+    },
+    async ({ entry, inputs, reserve, database }) => {
+      const sibling: SubagentRunRecord = {
+        ...structuredClone(entry),
+        runId: "surviving-sibling",
+        taskRunId: "sibling-task",
+        childSessionKey: "agent:main:subagent:sibling",
+      };
+      seedSubagentCompletionOwner({ subagent: sibling, databaseOptions: { database } });
+      const retire = (runId: string) => {
+        const current = subagentRuns.get(runId);
+        if (!current) {
+          throw new Error("Synthetic cohort owner disappeared");
+        }
+        subagentRuns.set(runId, { ...current, suppressCompletionDelivery: true });
+      };
+      if (scenario === "leader already retired") {
+        retire(entry.runId);
+      }
+      const requester = {
+        cfg: {},
+        entry: { sessionId: "requester-session", updatedAt: 1 },
+        canonicalKey: entry.requesterSessionKey,
+        agentId: entry.requesterAgentId,
+        storePath: entry.requesterStorePath,
+      };
+      const entered = createDeferredCore();
+      const lookup =
+        createDeferredCore<Awaited<ReturnType<typeof requesterLookup.loadRequesterSessionEntry>>>();
+      vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
+        entered.resolve();
+        return scenario === "leader already retired" ? requester : await lookup.promise;
+      });
+      const restoration = reserveRestoredSubagentControllerSources([...subagentRuns.values()]);
+      if (scenario !== "leader already retired") {
+        try {
+          await entered.promise;
+          retire(entry.runId);
+          if (scenario === "whole batch retires during lookup") {
+            retire(sibling.runId);
+          } else if (scenario === "sibling replaced during lookup") {
+            subagentRuns.set(sibling.runId, { ...sibling, generation: sibling.generation! + 1 });
+          }
+        } finally {
+          lookup.resolve(requester);
+        }
+      }
+      const restored = await restoration;
+      inputs.push(...restored);
+      const human = reserve("new-human-after-mixed-cohort");
+      if (
+        scenario === "whole batch retires during lookup" ||
+        scenario === "sibling replaced during lookup"
+      ) {
+        expect(restored).toEqual([]);
+        expect(tryClaimSessionControllerTask(human, "visible")).toBeDefined();
+        return;
+      }
+      expect(restored).toHaveLength(1);
+      // Retirement changes the representative, not the frozen reservation identity.
+      expect(restored[0]?.sourceTurnId).toBe(
+        "requester-settle:main:agent:main:main:completion-run,surviving-sibling:yield-3",
+      );
+      expect(tryClaimSessionControllerTask(human, "visible")).toBeUndefined();
+      const claim = tryClaimSessionControllerTask(restored[0]!);
+      expect(claim).toBeDefined();
+      if (claim) {
+        releaseSessionControllerClaim(claim);
+        await claim.settlement.promise;
+      }
+      expect(tryClaimSessionControllerTask(human, "visible")).toBeDefined();
+    },
+  );
+});

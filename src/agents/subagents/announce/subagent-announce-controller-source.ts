@@ -189,7 +189,8 @@ export async function reserveRestoredSubagentControllerSources(
         ? [member]
         : [];
     });
-    if (entry !== batch[0]) {
+    // A retired member remains in the frozen identity, but cannot represent its owed siblings.
+    if (entry !== batch.find((member) => !isSubagentObligationRetired(member))) {
       continue;
     }
     const identity = buildRequesterSettleWakeIdentity({
@@ -201,10 +202,6 @@ export async function reserveRestoredSubagentControllerSources(
       retainedWake: wake,
       hasPrivateCompletion: batch.some((member) => member.completionTarget === "parent"),
     });
-    const caller = Object.freeze({
-      deliveryRoute: entry.requesterOrigin && Object.freeze(structuredClone(entry.requesterOrigin)),
-      run: <T>(run: () => Promise<T>) => run(),
-    });
     reservations.push([
       Math.max(...batch.map((member) => member.execution.endedAt ?? member.createdAt)),
       async () => {
@@ -212,14 +209,18 @@ export async function reserveRestoredSubagentControllerSources(
           entry.requesterSessionKey,
           entry.requesterAgentId,
         );
-        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+        const currentBatch = batch.map((member) =>
+          getCurrentSubagentRunOwner(subagentRuns, member),
+        );
+        // Retirement can publish during requester lookup; the same frozen cohort still owns FIFO.
+        const current = currentBatch.find(
+          (member) => member && !isSubagentObligationRetired(member),
+        );
         if (
           !current ||
-          isSubagentObligationRetired(current) ||
           !current.requesterSettleWake ||
           current.requesterSettleWake.rearmGeneration !== wake.rearmGeneration ||
-          batch.some((member) => {
-            const owner = getCurrentSubagentRunOwner(subagentRuns, member);
+          currentBatch.some((owner) => {
             return (
               !owner ||
               !owner.requesterSettleWake ||
@@ -231,6 +232,11 @@ export async function reserveRestoredSubagentControllerSources(
         ) {
           return undefined;
         }
+        const caller = Object.freeze({
+          deliveryRoute:
+            current.requesterOrigin && Object.freeze(structuredClone(current.requesterOrigin)),
+          run: <T>(run: () => Promise<T>) => run(),
+        });
         return reserveSubagentControllerSource(current, identity.batchKey, undefined, caller, {
           replaceInactiveTarget: true,
           requester,
