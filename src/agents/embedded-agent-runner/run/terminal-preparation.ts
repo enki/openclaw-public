@@ -311,7 +311,9 @@ export function prepareEmbeddedRunTerminal(input: {
         );
   // Compaction can outlive an already completed current answer. Keep that final
   // through the same scoped recovery path as a late prompt timeout.
-  const canRecoverCompletedAnswer = timedOutDuringPrompt || timedOutDuringCompaction;
+  const canRecoverCompletedAnswer =
+    timedOutDuringPrompt ||
+    (timedOutDuringCompaction && isEmbeddedRunTerminalTimeout(input.terminalState.outcome));
   const recoveredFinalAssistantTextAfterPromptTimeout =
     sourceReplyDeliveryState === "missing" &&
     canRecoverCompletedAnswer &&

@@ -141,7 +141,6 @@ it("keeps an unfinished compaction timeout out of successful command settlement"
       lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration,
       startedAt: 1,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },
@@ -165,14 +164,21 @@ it("keeps an unfinished compaction timeout out of successful command settlement"
 });
 
 it("keeps an external cancellation during compaction distinct from a timeout", async () => {
+  const text = "Completed answer must not escape an external cancellation.";
+  const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
   const { result } = await resolveTerminal({
     terminal: { kind: "aborted", source: "external", timeoutObservation: "compaction" },
+    assistantTexts: [text],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
   });
   expect(result.meta.aborted).toBe(true);
   expect(resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false })).toMatchObject({
     reason: "aborted",
     status: "error",
   });
+  expect(result.payloads ?? []).toEqual([]);
   expect(
     result.payloads?.some((payload) => payload.text?.includes("compaction timed out")),
   ).not.toBe(true);
