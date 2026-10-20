@@ -812,6 +812,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/openclaw-tools.sessions-send-child-coordination.test.ts",
   "src/agents/openclaw-tools.sessions.test.ts",
   "src/agents/tools/scoped-session-access.test.ts",
+  "src/agents/tools/sessions-send-reply-flow.requester.test.ts",
   "src/agents/tools/sessions-send-tool.queue-authority.test.ts",
   "src/agents/sessions/agent-session-code-mode-source.test.ts",
   "src/agents/sessions/agent-session-compaction.admission.test.ts",

@@ -24,7 +24,10 @@ import {
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import type { AgentStepSession } from "./agent-step.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
@@ -243,13 +246,15 @@ export function prepareSessionsSendReplyContext(params: {
   >;
 }): SessionsSendReplyContext {
   const caller = getGatewayToolCallerIdentity();
-  const requester = caller?.requesterOrigin
-    ? {
-        agentId: caller.agentId,
-        sessionKey: caller.sessionKey,
-        requesterOrigin: caller.requesterOrigin,
-      }
-    : undefined;
+  const { requesterOrigin } = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
+  const requester =
+    caller && requesterOrigin
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          requesterOrigin,
+        }
+      : undefined;
   const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
   const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
   const requesterSession = requesterSessionId
