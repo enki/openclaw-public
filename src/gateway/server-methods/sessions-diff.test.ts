@@ -731,10 +731,10 @@ describe("loadSessionDiff", () => {
         expect.objectContaining({ path: "changed.txt", additions: 1, deletions: 0 }),
       ]);
       expect(result.files[0]?.patch).toContain("+new change");
-      // One checkout read, base selection, tracked inventory/patch, and untracked listing.
+      // Revision status, checkout read, base selection, tracked inventory/patch, untracked listing.
       expect(
         commands.mock.calls.filter(([argv]) => argv[argv.indexOf("-C") + 1] === repoRoot).length,
-      ).toBeLessThanOrEqual(6);
+      ).toBeLessThanOrEqual(7);
     },
   );
 
@@ -876,13 +876,16 @@ describe("loadSessionDiff", () => {
       append("tracked.txt", "after\n");
       write("loose.txt", "new\n");
       write("ignored.txt", "hidden\n");
+      const linkedDirectory = tempDir("openclaw-diff-directory-link-");
+      fs.mkdirSync(path.join(linkedDirectory, ".git"));
+      fs.symlinkSync(linkedDirectory, path.join(repoRoot, "directory-link"));
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       const full = await readDiff();
       const summary = await readDiff({ summaryOnly: true });
       commands.mockClear();
       expect(await readDiff()).toEqual(full);
       expect(await readDiff({ summaryOnly: true })).toEqual(summary);
-      expect(commands).not.toHaveBeenCalled();
+      expect(commands.mock.calls.filter(([argv]) => !argv.includes("status"))).toEqual([]);
 
       write("loose.txt", "new\nsecond\n");
       append("tracked.txt", "third\n");
@@ -938,7 +941,7 @@ fi
       expect(filePaths(await readDiff())).toContain("system-ignored.txt");
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       expect(filePaths(await readDiff())).toContain("system-ignored.txt");
-      expect(commands).not.toHaveBeenCalled();
+      expect(commands.mock.calls.filter(([argv]) => !argv.includes("status"))).toEqual([]);
 
       fs.writeFileSync(excludes, "system-ignored.txt\n");
       execFileSync(realGit, ["config", "--file", config, "core.excludesFile", excludes]);

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
 import { encodePngRgba } from "../../src/media/png-encode.js";
+import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   readMockUserText,
@@ -58,8 +59,16 @@ const { values } = parseArgs({
     clients: { type: "string", default: "60" },
     "exact-clients": { type: "string" },
     "activity-summaries": { type: "boolean", default: false },
+    "recap-burst-repeats": { type: "string", default: "0" },
+    "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
+    "duration-ms": { type: "string", default: "3600000" },
+    "warmup-ms": { type: "string", default: "300000" },
+    "round-interval-ms": { type: "string", default: "15000" },
+    "memory-interval-ms": { type: "string", default: "60000" },
+    "retained-profile-ms": { type: "string", default: "600000" },
+    "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
@@ -89,21 +98,28 @@ if (
     "chat.send",
     "transcript-broadcast",
     "attempt-retention",
+    "memory-soak",
     "plugins.reload",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, or plugins.reload",
+    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+const soakScenario = scenario === "memory-soak";
+const toolScenario = scenario === "chat.send" || retentionScenario || soakScenario;
 const turnScenario =
-  scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
+  scenario === "chat.send" ||
+  scenario === "transcript-broadcast" ||
+  retentionScenario ||
+  soakScenario;
 if (
   !values.allocations &&
   !values["stream-start-allocations"] &&
   scenario !== "transcript-broadcast" &&
-  !retentionScenario
+  !retentionScenario &&
+  !soakScenario
 ) {
   throw new Error("--scenario requires --allocations");
 }
@@ -123,9 +139,35 @@ if (exactClients > clientCount) {
 }
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
+const durationMs = integer(values["duration-ms"], "--duration-ms");
+const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
+const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
+const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
+const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
+if (
+  soakScenario &&
+  (values.allocations || values["stream-start-allocations"] || retainedProfileMs > durationMs)
+) {
+  throw new Error(
+    "memory-soak needs a retained profile no longer than its duration and no allocation-churn capture",
+  );
+}
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
+const recapBurstIntervalMs = integer(
+  values["recap-burst-interval-ms"],
+  "--recap-burst-interval-ms",
+  0,
+);
+if (recapBurstRepeats > 100 || recapBurstIntervalMs > 1000) {
+  throw new Error("recap burst limits are 100 repeats and a 1000 ms interval");
+}
+if (recapBurstRepeats && (!values["activity-summaries"] || !turnScenario)) {
+  throw new Error("--recap-burst-repeats requires --activity-summaries and a turn scenario");
+}
 if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenario) {
   throw new Error("--cpu-profile and --stream-start-diagnostics require a turn scenario");
 }
@@ -176,13 +218,23 @@ cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
 cfg.plugins = {
   ...cfg.plugins,
-  entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+  entries: {
+    ...(soakScenario ? cfg.plugins?.entries : {}),
+    "memory-core": { config: { dreaming: { enabled: false } } },
+  },
 };
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
   }
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
+if (soakScenario) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  if (cfg.plugins.allow?.length) {
+    cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
+  }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
 let reloadPluginId: string | undefined;
@@ -257,6 +309,8 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let reasoningResponses = 0;
+let reasoningReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -311,6 +365,8 @@ let cohort:
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
+      reasoningSignatures: Map<string, string>;
+      incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
       ready: Promise<void>;
@@ -353,9 +409,30 @@ const mock = createServer((req, res) => {
           )
         : [];
     const toolOutput = toolOutputs.at(-1);
-    const continuation =
-      (scenario === "chat.send" || retentionScenario) && toolOutput !== undefined;
+    const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
+      if (retentionScenario || soakScenario) {
+        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        if (
+          expectedSignature === undefined ||
+          !Array.isArray(input) ||
+          !input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+          )
+        ) {
+          throw new Error("synthetic reasoning signature did not survive the provider request");
+        }
+        const incompleteSignature = cohort?.incompleteReasoningSignatures.get(toolOutput.call_id);
+        if (
+          incompleteSignature !== undefined &&
+          input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === incompleteSignature,
+          )
+        ) {
+          throw new Error("reasoning-only output-limit signature was replayed during recovery");
+        }
+        reasoningReplayRequests++;
+      }
       if (
         toolOutputs.some(
           (toolResult) =>
@@ -429,7 +506,8 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
-      if (primary && (scenario === "chat.send" || retentionScenario) && cohort) {
+      let reasoningReplayKey = toolOutput?.call_id;
+      if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
@@ -443,6 +521,7 @@ const mock = createServer((req, res) => {
           };
         });
         toolCalls += items.length;
+        reasoningReplayKey = items.at(-1)?.call_id;
         toolAnswer = [
           ...items.flatMap((item, output_index) => [
             { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
@@ -465,7 +544,13 @@ const mock = createServer((req, res) => {
           },
         ];
       }
-      let answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      let answer =
+        toolAnswer ??
+        (facts.purpose === "activity-recap"
+          ? responseEvents([`Synthetic recap for cohort ${cohort?.id}.`])
+          : primary || continuation
+            ? events
+            : utilityEvents);
       if (retentionScenario && continuation && cohort) {
         if (!cohort.outputLimited.has(toolOutput.call_id)) {
           cohort.outputLimited.add(toolOutput.call_id);
@@ -494,7 +579,37 @@ const mock = createServer((req, res) => {
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (
+          (retentionScenario || soakScenario) &&
+          (primary || continuation) &&
+          "response" in event &&
+          event.response !== undefined
+        ) {
+          const reasoning = {
+            type: "reasoning",
+            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            status: "completed",
+            summary: [],
+            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+          };
+          if (reasoningReplayKey) {
+            // Replay keeps completed reasoning and drops reasoning-only length stops.
+            const signatures =
+              event.type === "response.completed"
+                ? cohort?.reasoningSignatures
+                : cohort?.incompleteReasoningSignatures;
+            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          }
+          const output_index = event.response.output.length;
+          for (const type of ["response.output_item.added", "response.output_item.done"]) {
+            res.write(`data: ${JSON.stringify({ type, output_index, item: reasoning })}\n\n`);
+          }
+          res.write(
+            `data: ${JSON.stringify({ ...event, response: { ...event.response, output: [...event.response.output, reasoning] } })}\n\n`,
+          );
+        } else {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -532,6 +647,17 @@ let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
 let recapRequests = 0;
+type RecapReceipt = {
+  client: number;
+  key: string;
+  state: unknown;
+  text: unknown;
+  updatedAt: unknown;
+  receivedAtEpochMs: number;
+};
+const perClientRecaps: Map<string, RecapReceipt>[] = [];
+const recapReceipts: RecapReceipt[] = [];
+let recapPhase: Awaited<ReturnType<typeof runRecapBurst>> | undefined;
 let gateway: ChildProcess | undefined;
 function fieldBytes(record: Record<string, unknown>) {
   return Object.fromEntries(
@@ -676,6 +802,17 @@ async function rpc(
 function summarizeCpuProfile(profilePath: string) {
   const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
   const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
+  const childNodes = new Map(profile.nodes.map((node) => [node.id, node.children ?? []]));
+  const broadcastNodes = new Set<number>();
+  const pending = profile.nodes
+    .filter((node) => node.callFrame.functionName === "broadcastInternal")
+    .map((node) => node.id);
+  while (pending.length) {
+    const id = pending.pop()!;
+    broadcastNodes.add(id);
+    pending.push(...(childNodes.get(id) ?? []));
+  }
+  let broadcastSampledMs = 0;
   const sites = new Map<
     string,
     { frame: Profiler.ProfileNode["callFrame"]; sampledSelfMs: number }
@@ -687,21 +824,32 @@ function summarizeCpuProfile(profilePath: string) {
     }
     const key = JSON.stringify(frame);
     const site = sites.get(key) ?? { frame, sampledSelfMs: 0 };
-    site.sampledSelfMs += (profile.timeDeltas?.[index] ?? 1000) / 1000;
+    const sampledMs = (profile.timeDeltas?.[index] ?? 1000) / 1000;
+    site.sampledSelfMs += sampledMs;
+    if (broadcastNodes.has(id)) {
+      broadcastSampledMs += sampledMs;
+    }
     sites.set(key, site);
   }
   return {
     ...readGatewayCpuProfile(profilePath),
+    broadcastSampledMs,
     topSelfTime: [...sites.values()]
       .toSorted((left, right) => right.sampledSelfMs - left.sampledSelfMs)
       .slice(0, 40),
   };
 }
+let completedSoakRounds = 0;
+let sessionResets = 0;
 async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
-  if (retentionScenario) {
+  if (
+    retentionScenario ||
+    (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
+  ) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
       await rpc(client, "sessions.reset", { key });
+      sessionResets++;
     }
   }
   const child = gateway;
@@ -757,6 +905,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
+    reasoningSignatures: new Map(),
+    incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
     beforeRelease: finishAdmissionDiagnostics
       ? async () => {
@@ -857,6 +1007,9 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       current.phases.completedAtEpochMs = epochNow();
     });
     await Promise.all([cohortReady, captureWork, turns]);
+    if (soakScenario) {
+      completedSoakRounds++;
+    }
     return { phases: current.phases, ...capture };
   } finally {
     clearTimeout(timeout);
@@ -874,6 +1027,168 @@ async function drainEvents() {
     await delay(50);
   }
   throw new Error("model streams and subscriber events did not drain within 15s");
+}
+async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
+  const states: unknown[] = [];
+  for (let offset = 0; offset < keys.length; offset += 20) {
+    const batch = keys.slice(offset, offset + 20);
+    const result = await rpc(client, "sessions.activitySummary.ensure", {
+      sessions: batch.map((key) => ({ key })),
+    });
+    if (
+      !isRecord(result) ||
+      !Array.isArray(result.sessions) ||
+      result.sessions.length !== batch.length ||
+      result.sessions.some(
+        (row: unknown) =>
+          !isRecord(row) ||
+          !isRecord(row.activitySummary) ||
+          row.activitySummary.state === "unavailable",
+      )
+    ) {
+      throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
+    }
+    for (const row of result.sessions) {
+      states.push(row.activitySummary.state);
+    }
+  }
+  return states;
+}
+async function waitForCurrentRecaps(text: string, since = 0, pendingKeys: string[] = keys) {
+  const started = performance.now();
+  while (performance.now() - started < 15_000) {
+    assertGatewayAlive();
+    if (
+      perClientRecaps.every((rows) =>
+        keys.every((key) => {
+          const row = rows.get(key);
+          return (
+            row?.state === "current" &&
+            row.text === text &&
+            (!pendingKeys.includes(key) || row.receivedAtEpochMs >= since)
+          );
+        }),
+      )
+    ) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error("latest current recap did not reach every subscriber within 15s");
+}
+async function runRecapBurst(
+  client: ReturnType<typeof createGatewayWsClient>,
+  measuredRound?: number,
+) {
+  const child = gateway;
+  if (!child) {
+    throw new Error("owned Gateway is unavailable");
+  }
+  const text = `Synthetic recap for cohort ${cohort?.id}.`;
+  await ensureRecaps(client);
+  await waitForCurrentRecaps(text);
+  await drainEvents();
+  const initial = sessionEventSizesSnapshot();
+  const initialModelRequests = recapRequests;
+  const profilePath =
+    values["cpu-profile"] && measuredRound !== undefined
+      ? path.join(output, `recap-ensure-${measuredRound}.cpuprofile`)
+      : undefined;
+  if (profilePath) {
+    await controlGatewayProfile(child, "cpu", "start", profilePath);
+  }
+  const beforeRepeatCpu = await readGatewayCpuUsage(child);
+  const startedAtEpochMs = epochNow();
+  const repeats = [];
+  for (let repeat = 0; repeat < recapBurstRepeats; repeat++) {
+    const started = epochNow();
+    const responseStates = await ensureRecaps(client);
+    repeats.push({ startedAtEpochMs: started, completedAtEpochMs: epochNow(), responseStates });
+    if (repeat + 1 < recapBurstRepeats) {
+      await delay(Math.max(0, recapBurstIntervalMs - (epochNow() - started)));
+    }
+  }
+  const lastRepeat = repeats.at(-1);
+  await waitForCurrentRecaps(
+    text,
+    lastRepeat?.startedAtEpochMs,
+    keys.filter((_, index) => lastRepeat?.responseStates[index] === "updating"),
+  );
+  await drainEvents();
+  const completedAtEpochMs = epochNow();
+  const repeatCpu = measureGatewayCpuUsage(beforeRepeatCpu, await readGatewayCpuUsage(child));
+  if (profilePath) {
+    await controlGatewayProfile(child, "cpu", "stop", profilePath);
+  }
+  const noopSizes = Object.fromEntries(
+    [...sessionEventSizes].map(([bucket, sizes]) => [
+      bucket,
+      {
+        frames: sizes.frames - (initial[bucket]?.frames ?? 0),
+        bytes: sizes.bytes - (initial[bucket]?.bytes ?? 0),
+      },
+    ]),
+  );
+  for (const key of keys) {
+    const result = await rpc(client, "sessions.describe", { key });
+    const row = isRecord(result) && isRecord(result.session) ? result.session : undefined;
+    const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+    if (
+      !summary ||
+      summary.state !== "current" ||
+      summary.text !== text ||
+      perClientRecaps.some((rows) => rows.get(key)?.updatedAt !== summary.updatedAt)
+    ) {
+      throw new Error(`delivered recap differs from the final authoritative row for ${key}`);
+    }
+  }
+  const latestValueDelivery = perClientRecaps.flatMap((_, clientIndex) =>
+    keys.map((key) => {
+      const receipt = recapReceipts.find(
+        (candidate) =>
+          candidate.client === clientIndex &&
+          candidate.key === key &&
+          candidate.state === "current" &&
+          candidate.text === text,
+      );
+      if (!receipt || typeof receipt.updatedAt !== "number") {
+        throw new Error(`client ${clientIndex} missed the final activity-summary event for ${key}`);
+      }
+      return {
+        client: clientIndex,
+        key,
+        committedToReceivedMs: receipt.receivedAtEpochMs - receipt.updatedAt,
+      };
+    }),
+  );
+  return {
+    latestValueDelivery,
+    finalRecapsMatch: true,
+    turnAndInitialRecap: { modelRequests: initialModelRequests, sessionEventSizes: initial },
+    repeatedEnsure: {
+      repeats,
+      intervalMs: recapBurstIntervalMs,
+      startedAtEpochMs,
+      completedAtEpochMs,
+      ...repeatCpu,
+      ...(profilePath ? { cpuProfile: summarizeCpuProfile(profilePath) } : {}),
+      modelRequests: recapRequests - initialModelRequests,
+      sessionEventSizes: noopSizes,
+      finalReceiptAfterLastEnsureMs: lastRepeat
+        ? Math.max(
+            0,
+            ...perClientRecaps.flatMap((rows) =>
+              keys.map((key) => rows.get(key)!.receivedAtEpochMs - lastRepeat.completedAtEpochMs),
+            ),
+          )
+        : null,
+    },
+  };
+}
+function sessionEventSizesSnapshot() {
+  return Object.fromEntries(
+    [...sessionEventSizes].map(([bucket, sizes]) => [bucket, { ...sizes }]),
+  );
 }
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
@@ -931,6 +1246,9 @@ try {
     assertGatewayAlive();
     const clientCounters = new Map<string, number>();
     perClientCounters.push(clientCounters);
+    const recapRows = new Map<string, RecapReceipt>();
+    perClientRecaps.push(recapRows);
+    const rowEvents = new GatewaySessionRowEvents();
     let previousSeq: number | undefined;
     let receivedFrameBytes = 0;
     const client = createGatewayWsClient({
@@ -946,6 +1264,29 @@ try {
           previousSeq = event.seq;
         }
         const payload = isRecord(event.payload) ? event.payload : undefined;
+        if (values["activity-summaries"]) {
+          const decoded = rowEvents.project(event);
+          if (decoded.missingBaseline) {
+            subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
+          }
+          const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
+          const row = facts && isRecord(facts.session) ? facts.session : undefined;
+          const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+          if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
+            const receipt = {
+              client: index,
+              key: facts.sessionKey,
+              state: summary.state,
+              text: summary.text,
+              updatedAt: summary.updatedAt,
+              receivedAtEpochMs: epochNow(),
+            };
+            recapRows.set(facts.sessionKey, receipt);
+            if (facts.reason === "activity-summary") {
+              recapReceipts.push(receipt);
+            }
+          }
+        }
         if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
           const sizes = measureFrameFields(event, payload, receivedFrameBytes);
           if (sizes.duplicateEnvelopeFields !== undefined) {
@@ -1054,25 +1395,7 @@ try {
     if (turnScenario) {
       const streamStart = await runRound(sender, measuredRound);
       if (values["activity-summaries"]) {
-        for (let offset = 0; offset < keys.length; offset += 20) {
-          const batch = keys.slice(offset, offset + 20);
-          const result = await rpc(sender, "sessions.activitySummary.ensure", {
-            sessions: batch.map((key) => ({ key })),
-          });
-          if (
-            !isRecord(result) ||
-            !Array.isArray(result.sessions) ||
-            result.sessions.length !== batch.length ||
-            result.sessions.some(
-              (row: unknown) =>
-                !isRecord(row) ||
-                !isRecord(row.activitySummary) ||
-                row.activitySummary.state === "unavailable",
-            )
-          ) {
-            throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
-          }
-        }
+        recapPhase = await runRecapBurst(sender, measuredRound);
       }
       return streamStart;
     }
@@ -1114,21 +1437,82 @@ try {
     }
     return undefined;
   };
-  await runScenario();
+  const warmupStartedAt = performance.now();
+  do {
+    const started = performance.now();
+    await runScenario();
+    await drainEvents();
+    if (!soakScenario) {
+      break;
+    }
+    await delay(
+      Math.max(
+        0,
+        Math.min(
+          roundIntervalMs - (performance.now() - started),
+          warmupMs - (performance.now() - warmupStartedAt),
+        ),
+      ),
+    );
+  } while (performance.now() - warmupStartedAt < warmupMs);
   console.log("PHASE warmed");
-  await drainEvents();
-  const initialRetainedResources = retentionScenario
-    ? await readGatewayResources(gateway, { collectGarbage: true })
-    : undefined;
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
     }
     await delay(startAt - Date.now());
   }
+  const initialRetainedResources =
+    retentionScenario || soakScenario
+      ? await readGatewayResources(gateway, { collectGarbage: true })
+      : undefined;
   const measurementStartedAt = Date.now();
+  const measuredGateway = gateway;
   const samples = [];
-  for (let round = 0; round < rounds; round++) {
+  const memorySamples: Array<{
+    atEpochMs: number;
+    elapsedMs: number;
+    completedRounds: number;
+    sessionResets: number;
+    collectedGarbage: boolean;
+    resources: Awaited<ReturnType<typeof readGatewayResources>>;
+  }> = [];
+  const sampleMemory = async (collectGarbage = false) => {
+    const resources = await readGatewayResources(measuredGateway, { collectGarbage });
+    const sample = {
+      atEpochMs: Date.now(),
+      elapsedMs: Date.now() - measurementStartedAt,
+      completedRounds: samples.length,
+      sessionResets,
+      collectedGarbage: collectGarbage,
+      resources,
+    };
+    memorySamples.push(sample);
+    appendFileSync(path.join(output, "memory-samples.jsonl"), `${JSON.stringify(sample)}\n`);
+    console.log(`MEMORY ${JSON.stringify(sample)}`);
+  };
+  const retainedProfilePath = path.join(output, "retained.heapprofile");
+  let retainedProfileStartedAt: number | undefined;
+  if (soakScenario) {
+    await sampleMemory();
+  }
+  for (
+    let round = 0;
+    soakScenario ? Date.now() - measurementStartedAt < durationMs : round < rounds;
+    round++
+  ) {
+    const roundStartedAt = Date.now();
+    if (
+      soakScenario &&
+      retainedProfileMs > 0 &&
+      retainedProfileStartedAt === undefined &&
+      roundStartedAt - measurementStartedAt >= durationMs - retainedProfileMs
+    ) {
+      await controlGatewayProfile(gateway, "heap", "start", retainedProfilePath, {
+        includeCollectedObjects: false,
+      });
+      retainedProfileStartedAt = Date.now();
+    }
     counters.clear();
     eventBytes.clear();
     sessionEventSizes.clear();
@@ -1145,7 +1529,11 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    reasoningResponses = 0;
+    reasoningReplayRequests = 0;
     recapRequests = 0;
+    recapReceipts.length = 0;
+    recapPhase = undefined;
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics = values.diagnostics
       ? await startGatewayDiagnostics(gateway)
@@ -1210,8 +1598,8 @@ try {
                     throw new Error("concurrent sessions.list did not return the requested page");
                   }
                   const ended = performance.now();
-                  const durationMs = ended - started;
-                  listLatencies.push(durationMs);
+                  const requestDurationMs = ended - started;
+                  listLatencies.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
                       method: "sessions.list",
@@ -1220,7 +1608,7 @@ try {
                       round,
                       startedAtEpochMs: performance.timeOrigin + started,
                       endedAtEpochMs: performance.timeOrigin + ended,
-                      durationMs,
+                      durationMs: requestDurationMs,
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -1277,9 +1665,12 @@ try {
         `expected ${runCount} primary streams: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
       );
     }
-    if (scenario === "chat.send" && (toolCalls !== 1 || toolResults !== 1)) {
+    if (
+      (scenario === "chat.send" || soakScenario) &&
+      (toolCalls !== runCount || toolResults !== runCount)
+    ) {
       throw new Error(
-        `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
+        `expected ${runCount} completed tool calls, calls=${toolCalls}, results=${toolResults}`,
       );
     }
     if (
@@ -1292,6 +1683,15 @@ try {
     ) {
       throw new Error(
         `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
+      );
+    }
+    if (
+      (retentionScenario || soakScenario) &&
+      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+    ) {
+      throw new Error(
+        `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
@@ -1337,7 +1737,9 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
+      ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
         ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
         : {}),
@@ -1384,6 +1786,20 @@ try {
     };
     samples.push(sample);
     console.log(JSON.stringify(sample));
+    if (soakScenario) {
+      if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
+        await sampleMemory();
+      }
+      await delay(
+        Math.max(
+          0,
+          Math.min(
+            roundIntervalMs - (Date.now() - roundStartedAt),
+            durationMs - (Date.now() - measurementStartedAt),
+          ),
+        ),
+      );
+    }
     if (allocation) {
       console.table([
         {
@@ -1396,6 +1812,32 @@ try {
           "GC count": allocation.gcCount,
         },
       ]);
+    }
+  }
+  let retainedProfile;
+  if (soakScenario) {
+    await sampleMemory();
+    await sampleMemory(true);
+    if (retainedProfileStartedAt !== undefined) {
+      await controlGatewayProfile(gateway, "heap", "stop", retainedProfilePath);
+      const { sampledAllocatedBytes, topAllocationSites, ...profile } = readGatewayHeapProfile(
+        retainedProfilePath,
+        { includeCollectedObjects: false },
+      );
+      retainedProfile = {
+        ...profile,
+        startedAtEpochMs: retainedProfileStartedAt,
+        stoppedAtEpochMs: Date.now(),
+        sampledRetainedBytes: sampledAllocatedBytes,
+        topRetainedSites: topAllocationSites,
+      };
+    } else if (retainedProfileMs > 0) {
+      throw new Error("no retained profile window captured; shorten the round duration");
+    }
+    if (values["heap-snapshot"]) {
+      await readGatewayResources(gateway, {
+        snapshotPath: path.join(output, "settled.heapsnapshot"),
+      });
     }
   }
   const result = {
@@ -1420,6 +1862,8 @@ try {
     clientCount,
     exactClients,
     activitySummaries: values["activity-summaries"],
+    recapBurstRepeats,
+    recapBurstIntervalMs,
     runCount,
     chunks: chunkCount,
     chunkIntervalMs,
@@ -1427,6 +1871,21 @@ try {
     streamRequests,
     fixture,
     ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
+    ...(soakScenario
+      ? {
+          durationMs,
+          warmupMs,
+          roundIntervalMs,
+          memoryIntervalMs,
+          retainedProfileMs,
+          resetEveryRounds,
+          sessionResets,
+          completedSoakRounds,
+          initialRetainedResources,
+          memorySamples,
+          retainedProfile,
+        }
+      : {}),
     samples,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));

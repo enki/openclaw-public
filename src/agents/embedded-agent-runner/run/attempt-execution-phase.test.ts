@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transports/openai-responses-compact-request.js";
+import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -811,6 +812,30 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("preserves session watchdog attribution through model-call recovery", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    mocks.installStreamGuards.mockImplementationOnce(() => ({
+      onModelRequest: vi.fn(),
+      onModelUsage: vi.fn(),
+      getPromptCacheObservation: vi.fn(),
+      isModelCallActive: () => true,
+    }));
+    fixture.runAbort.mockImplementation((_timeout, reason) =>
+      fixture.input.runAbortController.abort(reason),
+    );
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+
+    const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
+    expect(streamInput.recoverStalledModelCall()).toBe(true);
+    expect(
+      summarizeOpenAITransportError(
+        new Error("stream aborted"),
+        fixture.input.runAbortController.signal,
+      ),
+    ).toContain("abortReason=session_watchdog");
+    expect(fixture.state.terminal).toMatchObject({ kind: "timeout", source: "idle" });
   });
 
   it("lets the compaction owner fall back after a request-local idle timeout", async () => {
