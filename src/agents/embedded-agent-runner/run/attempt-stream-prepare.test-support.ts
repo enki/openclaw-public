@@ -141,7 +141,9 @@ export async function createHeldSettlementSession() {
     await releaseSettlement.promise;
   };
   const { session } = await createTestSession({
-    resourceLoader: createResourceLoader(new Map([["agent_settled", [holdSettlement]]])),
+    resourceLoader: await createResourceLoader((api) => {
+      api.on("agent_settled", holdSettlement);
+    }),
   });
   streamMocks.streamSimple.mockImplementation((model) =>
     createAssistantResultStream(createAssistant(model, "Done.")),

@@ -4,6 +4,7 @@ import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../exec-defaults.js";
+import type { SandboxContext } from "../sandbox/types.js";
 import type { callGatewayTool } from "./gateway.js";
 
 export type CronCreatorToolAllowlistEntry =
@@ -63,6 +64,8 @@ export type CronToolOptions = {
   execOverrides?: ExecPolicyOverrides;
   /** Whether auto host selection resolves into this turn's sandbox. */
   sandboxed?: boolean;
+  /** Actual host-prepared target; a sandboxed flag cannot grant persistent execution. */
+  sandboxContext?: SandboxContext;
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.

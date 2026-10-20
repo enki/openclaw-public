@@ -47,6 +47,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/control-ui.response-authority.test.ts",
   "src/gateway/conversation-send.test.ts",
   "src/gateway/conversation-turn.test.ts",
+  "src/gateway/cron-stream-sandbox-authority.test.ts",
   "src/gateway/dashboard-session-title.incognito.test.ts",
   "src/gateway/desktop/node-observe.integration.test.ts",
   "src/gateway/device-pair-setup-completion.test.ts",
