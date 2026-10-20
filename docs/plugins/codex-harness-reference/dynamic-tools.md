@@ -88,14 +88,16 @@ Changing object-key order is compatible; changing the declaration is not. Invali
 saved catalog receipts stop reuse without replacing the thread or repairing its receipt.
 
 Inbound and private-completion producers identify their exact transient conversation
-context within `extraSystemPrompt`. Codex delivers the complete current snapshot,
-together with current tool bindings, through the existing parent-local inference
-and native developer-handoff paths. Managed inference receives it on every admitted
-parent request, including immediate post-compaction continuation; native
-additional-context deduplication is not used. Connections without that relay receive
-a full handoff before each turn and after compaction. As with the existing native
-refresh handoff, the immediate native continuation can precede the host callback
-and therefore lack the fresh turn context. No new durable cache is added.
+context within `extraSystemPrompt`. When the lifecycle selects a parent-local
+inference relay, it delivers the complete current snapshot together with current
+tool bindings on every admitted parent request, including immediate post-compaction
+continuation; native additional-context deduplication is not used. Connections
+without that relay retain the annotated context in native creation policy, including
+its existing policy-change protections. Developer handoffs before each turn and
+after compaction supplement that persistent context rather than replace it: native
+compaction can discard injected developer history before the host callback runs.
+Transient executable tool availability remains outside creation policy. No new
+durable cache is added.
 Configured conversation policy, execution hints, and caller-added instructions
 remain part of persistent thread identity. Invalid or stale annotations leave the
 full prompt persistent. Other harnesses still receive the complete prompt unchanged.
