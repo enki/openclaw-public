@@ -45,8 +45,10 @@ export function defineGatewayModuleBoundaryTests(
 
             await page.clock.install();
             await pauseVirtualClock(page);
+            const connectedSocketCount = await gateway.getSocketCount();
             await gateway.setOnline(false);
             await page.clock.runFor(2_001);
+            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(connectedSocketCount);
             const connectionStatus = page.locator(
               width === 390
                 ? ".mobile-connection-status .gateway-status:visible"
@@ -58,9 +60,10 @@ export function defineGatewayModuleBoundaryTests(
               .waitFor({ state: "visible" });
             const retry = connectionStatus.getByRole("button", { name: /Retry now/ });
             expect(await retry.isDisabled()).toBe(true);
-            // Offline mock sockets stay connecting until the fixture settles the attempt.
-            await gateway.closeLatest(1006, "synthetic failed reconnect");
-            await expect.poll(() => retry.isEnabled()).toBe(true);
+            // Offline mock sockets stay pending until explicitly settled. Keep
+            // backoff paused so this click exercises Retry after a failed attempt.
+            await gateway.closeLatest(1006, "synthetic failed attempt");
+            await expect.poll(() => retry.isDisabled()).toBe(false);
             const socketCount = await gateway.getSocketCount();
             await retry.click();
             await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
