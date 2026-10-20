@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export function defineGatewayModuleBoundaryTests(
@@ -43,7 +43,10 @@ export function defineGatewayModuleBoundaryTests(
             await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);
             expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
 
+            await page.clock.install();
+            await pauseVirtualClock(page);
             await gateway.setOnline(false);
+            await page.clock.runFor(2_001);
             const connectionStatus = page.locator(
               width === 390
                 ? ".mobile-connection-status .gateway-status:visible"
@@ -53,10 +56,17 @@ export function defineGatewayModuleBoundaryTests(
               .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
+            const retry = connectionStatus.getByRole("button", { name: /Retry now/ });
+            expect(await retry.isDisabled()).toBe(true);
+            // Offline mock sockets stay connecting until the fixture settles the attempt.
+            await gateway.closeLatest(1006, "synthetic failed reconnect");
+            await expect.poll(() => retry.isEnabled()).toBe(true);
             const socketCount = await gateway.getSocketCount();
-            await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            await retry.click();
+            await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
+            expect(await retry.isDisabled()).toBe(true);
             await gateway.setOnline(true);
+            await page.clock.resume();
             await waitForControlUiGatewayReady(page);
             await connectionStatus.waitFor({ state: "detached" });
           },
