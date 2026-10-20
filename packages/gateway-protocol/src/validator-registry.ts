@@ -30,6 +30,12 @@ export const validateBackupRecordOutcomeParams = compile(S.BackupRecordOutcomePa
 export const validateStorageLocationsListParams = compile(S.StorageLocationsListParamsSchema);
 export const validateStorageLocationsProbeParams = compile(S.StorageLocationsProbeParamsSchema);
 export const validateClawsCatalogSearchParams = compile(S.ClawsCatalogSearchParamsSchema);
+export const validateClawDraftDocument = compile(S.ClawDraftDocumentSchema);
+export const validateClawsDraftsCreateParams = compile(S.ClawsDraftsCreateParamsSchema);
+export const validateClawsDraftsReadParams = compile(S.ClawsDraftsReadParamsSchema);
+export const validateClawsDraftsSaveParams = compile(S.ClawsDraftsSaveParamsSchema);
+export const validateClawsDraftsReviewParams = compile(S.ClawsDraftsReviewParamsSchema);
+export const validateClawsDraftsPublishParams = compile(S.ClawsDraftsPublishParamsSchema);
 export const validateClawsCatalogSearchResult = compile(S.ClawsCatalogSearchResultSchema);
 export const validateClawsCatalogDetailParams = compile(S.ClawsCatalogDetailParamsSchema);
 export const validateClawsCatalogDetailResult = compile(S.ClawsCatalogDetailResultSchema);
@@ -548,6 +554,10 @@ export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSche
 export const validateApprovalResolveParams = compile(S.ApprovalResolveParamsSchema);
 export const validateExecApprovalsGetParams = compile(S.ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSchema);
+export const validateExecApprovalsNativeCommitParams = compile(
+  S.ExecApprovalsNativeCommitParamsSchema,
+);
+export const validateExecApprovalsNativeRequest = compile(S.ExecApprovalsNativeRequestSchema);
 export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);
