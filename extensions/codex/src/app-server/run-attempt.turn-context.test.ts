@@ -26,7 +26,7 @@ setupRunAttemptTestHooks();
 it.each([true, false])(
   "restores complete current context after native compaction (relay=%s)",
   async (relay) => {
-    // Codex c1382380 (0.162.0): AdditionalContextStore::merge deduplicates the
+    // Codex 092d3acd (0.162.1): AdditionalContextStore::merge deduplicates the
     // complete {kind,value} entry; replace_compacted_history does not reset it.
     // Model those independent native states, not a cache cleared by the test.
     let cache: JsonObject = {};
@@ -38,12 +38,9 @@ it.each([true, false])(
     const frames: JsonObject[] = [];
     const persistent = "Persistent synthetic operator policy.";
     const tail = "Unchanged conversation and delivery guidance α🙂. ".repeat(250);
-    const snapshots = [
-      `First section A.\n${tail}`,
-      `First section A.\n${tail}`,
-      `First section B.\n${tail}`,
-      "",
-    ];
+    const snapshots = relay
+      ? [`First section A.\n${tail}`, `First section A.\n${tail}`, `First section B.\n${tail}`, ""]
+      : [`First section A.\n${tail}`, `First section A.\n${tail}`];
     const harness = createStartedThreadHarness(
       async (method, request) => {
         if (method === "account/read") {
@@ -128,13 +125,11 @@ it.each([true, false])(
         };
         const run = runCodexAppServerAttempt(params);
         await run.waitForTurnAccepted();
-        if (index === 0) {
+        if (index === 0 && relay) {
           release = protectCodexAppServerLiveThread(harness.client, "thread-1");
         }
-        // Managed inference must already be complete before any host callback.
-        if (relay) {
-          frames.push(observe());
-        }
+        // The next inference must have current context before any host callback.
+        frames.push(observe());
         // Mid-turn history replacement retains the native dedup cache too.
         await harness.notify(
           itemNotification("item/started", { type: "contextCompaction", id: `compact-${index}` }),
@@ -147,25 +142,19 @@ it.each([true, false])(
         await harness.notify(
           itemNotification("item/completed", { type: "contextCompaction", id: `compact-${index}` }),
         );
-        if (relay) {
-          frames.push(observe());
-        }
+        frames.push(observe());
         await Promise.race([
           compacted.promise,
           run.then(() => {
             throw new Error("Attempt ended before compaction projection");
           }),
         ]);
-        if (!relay) {
-          // The native fallback promises restoration after the host handoff, not before it.
-          frames.push(observe());
-        }
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         await run;
       }
-      expect(frames).toHaveLength(snapshots.length * (relay ? 2 : 1));
+      expect(frames).toHaveLength(snapshots.length * 2);
       for (const [index, text] of snapshots.entries()) {
-        for (const frame of frames.slice(index * (relay ? 2 : 1), (index + 1) * (relay ? 2 : 1))) {
+        for (const frame of frames.slice(index * 2, (index + 1) * 2)) {
           const payload = frame;
           if (typeof payload.instructions !== "string") {
             throw new Error("Expected complete model instructions");
@@ -178,9 +167,13 @@ it.each([true, false])(
             expect(visible).toContain(text.split("\n")[0]);
           } else {
             expect(payload.instructions).not.toContain(tail);
-            expect(visible).toContain("No additional conversation instructions for this turn.");
+            if (relay) {
+              expect(visible).toContain("No additional conversation instructions for this turn.");
+            }
           }
-          expect(visible).toContain("Current OpenClaw tool bindings for this turn");
+          if (relay) {
+            expect(visible).toContain("Current OpenClaw tool bindings for this turn");
+          }
         }
       }
     } finally {
@@ -193,7 +186,11 @@ it.each([true, false])(
 it("retains a protected parent through real inbound composition, independent completion, and owner reentry", async () => {
   const { composition, completion } = await prepareConversationTurnContextContract();
   expect(composition.extraSystemPrompt).not.toBe(completion.extraSystemPrompt);
-  const harness = createStartedThreadHarness(async () => undefined, { persistedThreads: [] });
+  const harness = createStartedThreadHarness(
+    async (method) => (method === "account/read" ? { account: { type: "apiKey" } } : undefined),
+    { persistedThreads: [] },
+  );
+  ownCodexInferenceClient(harness.client);
   const ownershipTransfers = vi.spyOn(clientRuntime, "consumeCodexAppServerLiveThread");
   let release = () => {};
   const sessionFile = path.join(tempDir, "producer-parent.jsonl");

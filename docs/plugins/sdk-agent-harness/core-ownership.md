@@ -583,3 +583,11 @@ verified local native metadata while protected. If that metadata is unavailable
 is reported; no catalog is guessed. A receiptless resume with no recorded catalog
 fingerprint does not establish which declarations the existing native thread
 accepted. Other native configuration and permission-change guards still apply.
+
+Producer-annotated conversation and delivery instructions use current-inference
+context only when the lifecycle selects a parent-local inference relay. Other
+connections retain that section in native creation policy, including its existing
+policy-change protections. Native compaction can discard injected developer
+history before a host callback runs, so later instruction handoffs supplement
+creation policy rather than replace it on those connections. Transient executable
+tool availability remains outside creation policy.

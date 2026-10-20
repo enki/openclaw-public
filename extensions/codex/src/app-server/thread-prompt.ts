@@ -88,6 +88,8 @@ export function buildDeveloperInstructions(
     dynamicTools?: readonly CodexDynamicToolSpec[];
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    /** The lifecycle must select a compaction-safe carrier before omitting this context. */
+    omitConversationTurnContext?: boolean;
   } = {},
 ): string {
   const deferredToolNames = new Set<string>();
@@ -219,7 +221,9 @@ export function buildDeveloperInstructions(
     }),
     nativeCommandGuidance,
     params.gitCoauthorPrompt,
-    splitCodexExtraSystemPrompt(params).persistent,
+    options.omitConversationTurnContext
+      ? splitCodexExtraSystemPrompt(params).persistent
+      : params.extraSystemPrompt,
   ];
   return sections.filter((section) => section?.trim()).join("\n\n");
 }

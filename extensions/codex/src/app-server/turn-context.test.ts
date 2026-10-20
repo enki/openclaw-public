@@ -17,7 +17,8 @@ describe("producer-owned conversation context", () => {
       extraSystemPrompt: `${text}\n\n${policy}`,
       extraSystemPromptTurnContext: { start: 0, text },
     };
-    const instructions = buildDeveloperInstructions(current);
+    const instructions = buildDeveloperInstructions(current, { omitConversationTurnContext: true });
+    expect(buildDeveloperInstructions(current)).toContain(text);
     expect(instructions).toBe(buildDeveloperInstructions({ ...params, extraSystemPrompt: policy }));
     const changedConfigs: JsonObject[] = [
       { developerInstructions: `${instructions}\nChanged policy.` },
@@ -57,11 +58,14 @@ describe("producer-owned conversation context", () => {
     const params = createParams("/synthetic/context.jsonl", "/workspace");
     const extraSystemPrompt = "turn\n\npolicy";
     expect(
-      buildDeveloperInstructions({
-        ...params,
-        extraSystemPrompt,
-        extraSystemPromptTurnContext: context,
-      }),
+      buildDeveloperInstructions(
+        {
+          ...params,
+          extraSystemPrompt,
+          extraSystemPromptTurnContext: context,
+        },
+        { omitConversationTurnContext: true },
+      ),
     ).toBe(buildDeveloperInstructions({ ...params, extraSystemPrompt }));
   });
 });

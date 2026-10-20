@@ -54,15 +54,18 @@ describe("native completion durable receipts", () => {
       await parent.ready;
       parent.bindTurn("parent-turn");
       await f.spawn(client);
+      expect(parent.listPendingChildren()).toMatchObject([{ state: "running" }]);
       await client.notify(completedChild());
       retirement = parent.unregister();
       await entered.promise;
       observer = await f.register(client);
-      await observer.ready;
       observer.bindTurn("observer-turn");
+      // Restoration joins the held retirement. Observe the native receipt on
+      // the admitted registration before releasing that write and joining ready.
       await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
       release.resolve();
       await retirement;
+      await observer.ready;
       await observer.unregister();
       expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
         [],
@@ -109,10 +112,11 @@ describe("native completion durable receipts", () => {
       await parent.ready;
       parent.bindTurn("parent-turn");
       await f.spawn(client);
+      expect(parent.listPendingChildren()).toMatchObject([{ state: "running" }]);
       await parent.unregister();
       await client.notify(completedChild());
-      expect(failedReads).toBe(1);
       expect(f.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ result }));
+      expect(failedReads).toBe(1);
       expect(
         mutations.mock.calls.filter(
           ([, mutation]) => mutation.kind === "consume-native-subagent-assignment",

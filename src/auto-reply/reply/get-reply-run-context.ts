@@ -622,7 +622,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     const annotateBody = (body: string) =>
       annotateInterSessionPromptText(prependMediaNote(body), sessionCtx.InputProvenance);
     return {
-      mediaNote,
       inboundMediaIndexes: generatedMedia.mediaIndexes,
       ...(media.length > 0 ? { media } : {}),
       prefixedCommandBody: annotateBody(additions.prefixedBody ?? base.effectiveBaseBody),
@@ -631,7 +630,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         inboundEventKind === "room_event"
           ? base.transcriptBody
           : prependMediaNote(base.transcriptBody),
-      ...base,
+      transcriptBody: base.transcriptBody,
       currentInboundContext: sourceContext.length
         ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
         : base.currentInboundContext,

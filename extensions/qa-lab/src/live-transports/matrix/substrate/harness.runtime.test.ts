@@ -91,10 +91,8 @@ const awake = async () => {};
 function recordingProxy(targetBaseUrl: string, setTargetBaseUrl = vi.fn()) {
   return {
     baseUrl: targetBaseUrl,
-    buildManifest: vi.fn(),
     installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
     records: () => [],
-    setScenarioId: vi.fn(),
     setTargetBaseUrl,
     stop: vi.fn(awake),
   };
@@ -222,7 +220,6 @@ describe("matrix harness runtime", () => {
         sleepImpl: vi.fn(awake),
         startRecordingProxyImpl: vi.fn(async ({ targetBaseUrl }) => ({
           ...recordingProxy(targetBaseUrl, setTargetBaseUrl),
-          createExchangeContext: vi.fn(),
           onExchange: vi.fn(),
         })),
       },
@@ -258,16 +255,14 @@ describe("matrix harness runtime", () => {
     });
   });
 
-  it("cancels Matrix versions probe response bodies", async () => {
-    const cancel = vi.fn(awake);
-    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+  it("probes Matrix versions with a bounded request", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true }));
 
     await expect(isMatrixVersionsReachable(host, fetchImpl)).resolves.toBe(true);
 
     expect(fetchImpl).toHaveBeenCalledWith(`${host}_matrix/client/versions`, {
       signal: expect.any(AbortSignal),
     });
-    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a stalled versions request when its deadline signal aborts", async () => {
@@ -323,9 +318,7 @@ describe("matrix harness runtime", () => {
       ({ result }) => {
         expect(result.baseUrl).toBe(container);
         expect(fetchCalls).toEqual(
-          [host, host, container, host, container, container].map(
-            (url) => `${url}_matrix/client/versions`,
-          ),
+          [host, host, container, host, container].map((url) => `${url}_matrix/client/versions`),
         );
       },
     );

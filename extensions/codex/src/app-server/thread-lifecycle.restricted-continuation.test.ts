@@ -349,11 +349,30 @@ describe("persistent restricted Codex continuation", () => {
     },
   );
 
-  it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
+  it("keeps default generic policy and annotated context without a relay", async () => {
+    const { fixture, common, attempt } = await createFixture();
+    attempt.extraSystemPrompt = "Current conversation context.\n\nPersistent operator policy.";
+    attempt.extraSystemPromptTurnContext = { start: 0, text: "Current conversation context." };
+    const first = await startOrResumeThread(common);
+    const request = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(request).toMatchObject({
+      developerInstructions: expect.stringContaining("OpenClaw has dynamic tools"),
+    });
+    expect(request).toMatchObject({
+      developerInstructions: expect.stringContaining(attempt.extraSystemPrompt),
+    });
+    await first.liveThreadOwnership?.release(first.threadId);
+  });
+
+  it.each(["unchanged", "skills", "generic policy", "conversation context", "safe deny"] as const)(
     "preserves the restricted incognito owner for %s",
     async (change) => {
       const { fixture, common, attempt, idle } = await createFixture();
       attempt.sessionKey = "agent:main:dashboard:incognito-restricted";
+      if (change === "conversation context") {
+        attempt.extraSystemPrompt = "Original conversation context.\n\nPersistent policy.";
+        attempt.extraSystemPromptTurnContext = { start: 0, text: "Original conversation context." };
+      }
       const original = {
         ...common,
         developerInstructions: "generic policy",
@@ -371,17 +390,37 @@ describe("persistent restricted Codex continuation", () => {
           ...(change === "safe deny"
             ? { pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }
             : {}),
+          ...(change === "conversation context"
+            ? {
+                extraSystemPrompt: "Changed conversation context.\n\nPersistent policy.",
+                extraSystemPromptTurnContext: { start: 0, text: "Changed conversation context." },
+              }
+            : {}),
         },
       };
-      if (change === "generic policy" || change === "safe deny") {
+      const policyChanged =
+        change === "generic policy" || change === "conversation context" || change === "safe deny";
+      if (policyChanged) {
+        const before = fixture.request.mock.calls.length;
         await expect(startOrResumeThread(changed)).rejects.toBeInstanceOf(
           CodexIncognitoPolicyChangeError,
         );
         expect(hasCodexAppServerLiveThread(fixture.client, first.threadId)).toBe(true);
+        expect(
+          fixture.request.mock.calls
+            .slice(before)
+            .filter(([method]) =>
+              [
+                "thread/start",
+                "thread/resume",
+                "thread/inject_items",
+                "thread/unsubscribe",
+                "turn/start",
+              ].includes(method),
+            ),
+        ).toEqual([]);
       }
-      const next = await startOrResumeThread(
-        change === "generic policy" || change === "safe deny" ? original : changed,
-      );
+      const next = await startOrResumeThread(policyChanged ? original : changed);
       expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
       expect(
         fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
