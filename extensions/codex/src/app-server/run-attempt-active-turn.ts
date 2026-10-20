@@ -605,6 +605,7 @@ export function activateCodexAttemptTurn(
     // Gateway-owned turns rely on that boundary before finalizing adoption.
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: params.model.input.includes("image"),
+    terminalReplyExpectation: params.terminalReplyExpectation,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
