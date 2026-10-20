@@ -8,6 +8,7 @@ import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "./runtime/internal-hooks.js";
+import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   applyToolCatalogCompaction,
@@ -381,5 +382,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         }
       },
     },
-  ];
+  ].map((tool) =>
+    tool.name === TOOL_CALL_RAW_TOOL_NAME ? bindAgentToolReplaySafety(tool, "dispatcher") : tool,
+  );
 }
