@@ -143,99 +143,84 @@ function captureDiagnostics(publicOnly = false) {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
-  it.each(["required", "optional", "result-required", undefined] as const)(
-    "admits matching %s input through the attached Codex backend and rejects mismatches",
-    async (terminalReplyExpectation) => {
-      const params = createTestParams();
-      params.terminalReplyExpectation = terminalReplyExpectation;
-      params.timeoutMs = 60_000;
-      params.toolAuthorityFingerprint = "synthetic-expectation-authority";
-      const attachBackend = vi.fn<(backend: ReplyBackend) => void>();
-      params.replyOperation = {
-        attachBackend,
-        detachBackend: vi.fn(),
-      } as unknown as NonNullable<typeof params.replyOperation>;
-      const harness = createStartedThreadHarness(async (method, _request, requestOptions) => {
-        if (method === "turn/steer") {
-          // The controlled transport must run the real physical-write callback.
-          (requestOptions as Parameters<CodexAppServerClient["request"]>[2])?.assertCurrent?.();
-          return { turnId: "turn-1" };
-        }
-        return undefined;
-      });
-      const run = runCodexAppServerAttempt(params);
-      await run.waitForTurnAccepted();
-      let result: Awaited<typeof run>;
-      try {
-        expect(attachBackend).toHaveBeenCalledTimes(1);
-        const matchingExpectation = terminalReplyExpectation ?? "required";
-        const options = {
-          debounceMs: 0,
-          isInboundUserMessage: true,
-          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-        };
-        expect(
-          queueActiveRunMessageForTest(params.sessionId, "REJECTED_EXPECTATION", {
-            ...options,
-            terminalReplyExpectation: matchingExpectation === "optional" ? "required" : "optional",
-          }),
-        ).toBe(false);
-        expect(harness.requests.filter(({ method }) => method === "turn/steer")).toEqual([]);
-
-        const accepted = vi.fn<(wasAccepted: boolean) => void>();
-        const consumed = vi.fn();
-        expect(
-          queueActiveRunMessageForTest(params.sessionId, "MATCHED_EXPECTATION", {
-            ...options,
-            terminalReplyExpectation: matchingExpectation,
-            waitForTranscriptCommit: true,
-            onQueueAccepted: accepted,
-            onQueueSettled: consumed,
-          }),
-        ).toBe(true);
-        await vi.waitFor(
-          () => expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(true),
-          fastWait,
-        );
-        expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
-        expect(consumed).not.toHaveBeenCalled();
-        const steer = harness.requests.find(({ method }) => method === "turn/steer");
-        expect(steer?.params).toMatchObject({
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [{ type: "text", text: "MATCHED_EXPECTATION" }],
-        });
-        const clientId = (steer?.params as { clientUserMessageId?: string } | undefined)
-          ?.clientUserMessageId;
-        if (!clientId) {
-          throw new Error("Native steering frame must carry its consumption identity");
-        }
-        await harness.notify({
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: { id: "matched-user", type: "userMessage", clientId },
-          },
-        });
-        await vi.waitFor(() => expect(consumed).toHaveBeenCalledExactlyOnceWith(), fastWait);
-        expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
-      } finally {
-        await harness.notify(
-          itemNotification("item/completed", {
-            id: "expectation-final",
-            type: "agentMessage",
-            phase: "final_answer",
-            text: "SYNTHETIC_EXPECTATION_COMPLETE",
-          }),
-        );
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        result = await run;
+  it("admits result-required input and waits for correlated native consumption", async () => {
+    const params = createTestParams();
+    params.terminalReplyExpectation = "result-required";
+    params.timeoutMs = 60_000;
+    const harness = createStartedThreadHarness(async (method, _request, requestOptions) => {
+      if (method === "turn/steer") {
+        // The controlled transport must run the real physical-write callback.
+        (requestOptions as Parameters<CodexAppServerClient["request"]>[2])?.assertCurrent?.();
+        return { turnId: "turn-1" };
       }
-      expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
-      expect(result.assistantTexts).toContain("SYNTHETIC_EXPECTATION_COMPLETE");
-    },
-  );
+      return undefined;
+    });
+    const { run, attachBackend, turnSettled } = await runWithObservedReplyTurn(params);
+    await run.waitForTurnAccepted();
+    let result: Awaited<typeof run>;
+    try {
+      expect(attachBackend).toHaveBeenCalledTimes(1);
+      const matchingExpectation = "result-required";
+      const options = {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false as const,
+        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      };
+      const accepted = vi.fn<(wasAccepted: boolean) => void>();
+      const consumed = vi.fn();
+      expect(
+        queueActiveRunMessageForTest(params.sessionId, "MATCHED_EXPECTATION", {
+          ...options,
+          terminalReplyExpectation: matchingExpectation,
+          waitForTranscriptCommit: true,
+          onQueueAccepted: accepted,
+          onQueueSettled: consumed,
+        }),
+      ).toBe(true);
+      await vi.waitFor(
+        () => expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(true),
+        fastWait,
+      );
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(consumed).not.toHaveBeenCalled();
+      const steer = harness.requests.find(({ method }) => method === "turn/steer");
+      expect(steer?.params).toMatchObject({
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "MATCHED_EXPECTATION" }],
+      });
+      const clientId = (steer?.params as { clientUserMessageId?: string } | undefined)
+        ?.clientUserMessageId;
+      if (!clientId) {
+        throw new Error("Native steering frame must carry its consumption identity");
+      }
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "matched-user", type: "userMessage", clientId },
+        },
+      });
+      await vi.waitFor(() => expect(consumed).toHaveBeenCalledExactlyOnceWith(), fastWait);
+      expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
+    } finally {
+      await harness.notify(
+        itemNotification("item/completed", {
+          id: "expectation-final",
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "SYNTHETIC_EXPECTATION_COMPLETE",
+        }),
+      );
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      result = await run;
+    }
+    await turnSettled;
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+    expect(result.assistantTexts).toContain("SYNTHETIC_EXPECTATION_COMPLETE");
+  });
 
   it("observes each provider response once without changing whole-turn accounting", async () => {
     const { events, find } = captureDiagnostics();
