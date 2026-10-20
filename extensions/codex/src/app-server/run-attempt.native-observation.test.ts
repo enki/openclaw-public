@@ -98,6 +98,7 @@ it("reads the running V2 child through the attempt's physical binding without na
       storePath: params.sessionTarget.storePath,
     });
     assert(selected.entry?.sessionId === params.sessionId);
+    assert(selected.entryCurrent);
     const requestsBeforeRead = harness.requests.length;
     const roster = await readCodexNativeSubagents(
       {
@@ -105,7 +106,7 @@ it("reads the running V2 child through the attempt's physical binding without na
         sessionKey: params.sessionTarget.sessionKey,
         sessionId: params.sessionId,
         lifecycleRevision: selected.entry.lifecycleRevision,
-        storePath: params.sessionTarget.storePath,
+        storePath: selected.entryCurrent.source.path,
         assertCurrent: selected.source,
       },
       { bindingStore: testCodexAppServerBindingStore },
