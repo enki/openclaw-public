@@ -124,19 +124,31 @@ describe("Responses watchdog through the loopback transport", () => {
         return stream.result();
       };
       let settleStream: (() => Promise<void>) | undefined;
+      let phase = "provider warmup";
       try {
         // Qualify lazy provider startup separately: this proof measures an
         // accepted response's progress deadline, not cold module preparation.
-        const warmup = await base(model, { messages: [] }, { apiKey: "synthetic-test-key" });
-        expect((await warmup.result()).stopReason).toBe("stop");
+        const warmup = await withinTest(
+          Promise.resolve(
+            base(
+              model,
+              { messages: [] },
+              { apiKey: "synthetic-test-key", signal: runAbort.signal },
+            ),
+          ),
+          signal,
+        );
+        expect((await withinTest(warmup.result(), signal)).stopReason).toBe("stop");
         exercising = true;
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        phase = "stream admission";
         const consuming = consume();
         const settled = consuming.catch(() => undefined);
         settleStream = async () => {
           await settled;
         };
         const waitForReceipt = async (marker: string) => {
+          phase = "response body receipt";
           const gate = createDeferred();
           pendingReceipt = { marker, resolve: gate.resolve };
           if (received.includes(marker)) {
@@ -152,6 +164,7 @@ describe("Responses watchdog through the loopback transport", () => {
           );
           // Body receipt precedes reducer processing; drain real I/O and its
           // cooperative yield before advancing the controlled watchdog clock.
+          phase = "response reducer yield";
           await setImmediate();
           await vi.advanceTimersByTimeAsync(0);
         };
@@ -173,6 +186,7 @@ describe("Responses watchdog through the loopback transport", () => {
         }
         const frameCount = activity === "hidden reasoning" ? 16 : 9;
         for (let frame = 1; frame <= frameCount; frame += 1) {
+          phase = "activity clock advancement";
           await vi.advanceTimersByTimeAsync(200);
           injected += 1;
           const payload =
@@ -194,11 +208,8 @@ describe("Responses watchdog through the loopback transport", () => {
           await waitForReceipt(`"sequence_number":${frame}}`);
         }
         expect(onTimeout).not.toHaveBeenCalled();
-        if (activity === "hidden reasoning") {
-          complete(response, true);
-          expect((await withinTest(consuming, signal)).stopReason).toBe("stop");
-          expect(onTimeout).not.toHaveBeenCalled();
-        } else {
+        if (activity !== "hidden reasoning") {
+          phase = "progress deadline expiry";
           await vi.advanceTimersByTimeAsync(199);
           expect(onTimeout).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
@@ -206,10 +217,26 @@ describe("Responses watchdog through the loopback transport", () => {
           await expect(withinTest(consuming, signal)).rejects.toThrow(/no model progress/);
           expect(response.writableEnded).toBe(false);
         }
-        expect((await consume()).content).toContainEqual(
+        // The scripted watchdog proof is over. Drain its cooperative-yield
+        // callbacks before restoring real timers for ordinary HTTP completion.
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+        if (activity === "hidden reasoning") {
+          phase = "productive response completion";
+          complete(response, true);
+          expect((await withinTest(consuming, signal)).stopReason).toBe("stop");
+          expect(onTimeout).not.toHaveBeenCalled();
+        }
+        phase = "recovery response completion";
+        expect((await withinTest(consume(), signal)).content).toContainEqual(
           expect.objectContaining({ type: "text", text: "RECOVERED" }),
         );
         expect(requests).toBe(2);
+      } catch (error) {
+        // A failed gate must identify the HTTP/reducer/clock boundary without
+        // exposing request content, credentials, or the listener address.
+        console.error("Responses loopback failed", { activity, phase, requests, injected });
+        throw error;
       } finally {
         runAbort.abort();
         cleanupSessionResources();
