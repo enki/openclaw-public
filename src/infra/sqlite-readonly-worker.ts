@@ -42,6 +42,7 @@ import {
 } from "./sqlite-readonly-worker-protocol.js";
 import type { SqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session-types.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 const SLOW_HARDWARE_HEADROOM = 10;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000 * SLOW_HARDWARE_HEADROOM;
@@ -312,22 +313,6 @@ export async function runSqliteReadOnlyOperation<Key extends keyof SqliteReadOnl
   return readOperationResult(capturedCommand.type, result);
 }
 
-/** Reuse a caller-owned native session without creating a canonical-read broker. */
-export async function runScopedSqliteReadOnlyOperation<Key extends keyof SqliteReadOnlyOperations>(
-  worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>,
-  pathname: string,
-  command: { type: Key; input: SqliteReadOnlyOperations[Key]["input"] },
-  options: Omit<SqliteReadOnlyOperationOptions, "mode" | "command">,
-): Promise<Awaited<SqliteReadOnlyOperations[Key]["output"]>> {
-  const capturedCommand = structuredClone(command);
-  const result = await worker.run(pathname, {
-    ...options,
-    mode: "operation",
-    command: capturedCommand,
-  });
-  return readOperationResult(capturedCommand.type, result);
-}
-
 function readOperationResult<Key extends keyof SqliteReadOnlyOperations>(
   type: Key,
   result: SqliteReadOnlyWorkerValue,
@@ -582,13 +567,14 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" | "file-generation" = "sync",
+  mode: "sync" | "content-version" | "file-generation" | "update-generation" = "sync",
+  expectedSourceIdentity?: DatabaseFileIdentity,
 ): string {
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }).argv,
+    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot, expectedSourceIdentity }).argv,
     {
       encoding: "utf8",
       windowsHide: true,
