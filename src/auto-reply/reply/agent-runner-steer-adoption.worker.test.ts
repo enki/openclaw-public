@@ -45,6 +45,31 @@ async function prepareOperation(run: FollowupRun) {
   return { operation, fingerprint };
 }
 
+function steeringRequester() {
+  return createAdmittedRunOperatorAuthority({
+    profileId: "steering-requester",
+    scopes: ["operator.read", "operator.write"],
+    source: {},
+    assertCurrent() {},
+  });
+}
+
+function preparedDelivery(
+  delivered: string[],
+): Pick<Parameters<typeof attachSteerBackend>[2], "queueMessage" | "queueMessageAsync"> {
+  return {
+    async queueMessage() {
+      throw new Error("Expected awaited steering");
+    },
+    async queueMessageAsync(text, options, preparation) {
+      await preparation.prepareCurrent();
+      preparation.assertCurrent();
+      delivered.push(text);
+      options?.onQueueAccepted?.(true);
+    },
+  };
+}
+
 it("consumes human steering once after the same logical owner recovers its detached backend", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:recovered-worker-steering";
@@ -123,12 +148,7 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       messageId: "incoming-steer",
       originatingChannel: "webchat",
     });
-    run.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "steering-requester",
-      scopes: ["operator.read", "operator.write"],
-      source: {},
-      assertCurrent() {},
-    });
+    run.operatorAuthority = steeringRequester();
     Object.assign(run.run, {
       agentId: "main",
       sessionKey: key,
@@ -140,15 +160,7 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
     const delivered: string[] = [];
     attachSteerBackend(operation, fingerprint, {
       cancel() {},
-      async queueMessage() {
-        throw new Error("Expected awaited steering preparation");
-      },
-      async queueMessageAsync(text, options, preparation) {
-        await preparation.prepareCurrent();
-        preparation.assertCurrent();
-        delivered.push(text);
-        options?.onQueueAccepted?.(true);
-      },
+      ...preparedDelivery(delivered),
     });
     const resultState: ReplyOperationRunState = {};
     const followup = vi.fn(async () => {});
@@ -204,12 +216,7 @@ it.for(
         messageId,
         originatingChannel: "webchat",
       });
-      run.operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "steering-requester",
-        scopes: ["operator.read", "operator.write"],
-        source: {},
-        assertCurrent() {},
-      });
+      run.operatorAuthority = steeringRequester();
       Object.assign(run.run, {
         agentId: "main",
         sessionId,
@@ -386,17 +393,7 @@ it.for([
       );
       const { operation, fingerprint } = await prepareOperation(original);
       const delivered: string[] = [];
-      attachSteerBackend(operation, fingerprint, {
-        async queueMessage() {
-          throw new Error("Expected awaited steering");
-        },
-        async queueMessageAsync(text, options, preparation) {
-          await preparation.prepareCurrent();
-          preparation.assertCurrent();
-          delivered.push(text);
-          options?.onQueueAccepted?.(true);
-        },
-      });
+      attachSteerBackend(operation, fingerprint, preparedDelivery(delivered));
       const run = createQueueTestRun({
         prompt: "make the requested PR",
         messageId: "incoming-request",
