@@ -458,6 +458,14 @@ lease join blocking the teardown needed to complete it. A clean database close
 also avoids a stale-lease integrity scan on the next startup; an interrupted close
 still requires that scan.
 
+On Linux, process supervision reaps exited adopted children while the Gateway is
+still running, so child cleanup does not have to wait for the Gateway itself to exit.
+
+If shutdown remains blocked on `restart.close.session-effects`, its pending-close
+diagnostic reports the remaining effect count and the first retained effect's
+session, run, admission phase, and interruption state. The details advance as
+effects release; a cleared source does not imply its retained effects have finished.
+
 The Codex native-profile recovery warning runs as service-owned background work.
 It does not hold readiness while another agent's database admission finishes.
 Doctor still awaits the same diagnostic, and shutdown joins any diagnostic reads
@@ -1255,7 +1263,9 @@ the current child session before resuming.
 Human follow-ups in retained child sessions take native custody under the actual
 executing run ID and follow-up prompt, including browser chat. The completed
 original run keeps its own outcome. Human ownership and dashboard nesting do not
-turn a child into a main-session replay candidate.
+turn a child into a main-session replay candidate. Because nothing resumes a
+child's interrupted turn, the next human message retires that turn's saved
+recovery claim and starts normally instead of waiting for a resume.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 For native children with completion notifications disabled, recovery sends a
