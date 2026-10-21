@@ -120,7 +120,8 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 <p class="muted">{t("chat.subagentsPanel.nativeCoverage")}</p>
                 <Show when={data().nativeError}>
                   <div class="chat-subagents__error" role="alert">
-                    {data().nativeError}
+                    <span>{data().nativeError}</span>
+                    <span class="muted">{t("chat.subagentsPanel.nativeRetry")}</span>
                   </div>
                 </Show>
                 <div role="list">

@@ -2276,6 +2276,7 @@ export const en: TranslationMap & {
       nativeCoverage: "Current native agent activity. Saved agent history is not included.",
       nativeEmpty: "No native agents are currently observed.",
       nativeTruncated: "Only part of the live native roster is shown.",
+      nativeRetry: "Updates retry automatically while this panel is visible.",
       nativeStatus: {
         running: "Running",
         completed: "Completed",
