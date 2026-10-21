@@ -327,9 +327,10 @@ describe("GPT-Live browser session lifecycle", () => {
     async ({ trigger, throwingCallback }) => {
       const { realtime, redeem, reserveLegacy, runAgentConsult } = makeBroker();
       const notifications: string[] = [];
+      let reentered: Promise<void> | undefined;
       const onError = vi.fn(() => {
         notifications.push("error");
-        void realtime.broker.cancelBrowserSession(reservation);
+        reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
         if (throwingCallback === "error") {
           throw new Error("host error callback failed");
         }
@@ -341,6 +342,7 @@ describe("GPT-Live browser session lifecycle", () => {
       const { socket } = await redeem(reservation.clientSecret);
       trigger(socket);
       expect(socket.closed).toBe(true);
+      await reentered;
       expect(realtime.getSessionCounts()).toEqual(emptyCounts);
       await realtime.cleanup();
       socket.emit("error", new Error("late socket error"));
