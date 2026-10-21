@@ -133,34 +133,38 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
-  const input: ReplyToolAuthorityInput = {
-    executionSelection: internal.executionSelection,
-    originatingChannel: attempt.messageChannel,
-    toolsAllow: attempt.toolsAllow,
-    disableTools: attempt.disableTools,
-    forceRestartSafeTools: attempt.forceRestartSafeTools,
-    forceCodeModeTools: attempt.forceCodeModeTools,
-    operatorAuthority,
-    run: {
-      ...attempt,
-      model: attempt.modelId,
-      elevatedLevel: attempt.bashElevated?.defaultLevel,
-      runtimePolicySessionKey: attempt.sandboxSessionKey,
-      traceAuthorized: false,
-      spawnedBy: attempt.spawnedBy ?? undefined,
-      senderId: attempt.senderId ?? undefined,
-      senderName: attempt.senderName ?? undefined,
-      senderUsername: attempt.senderUsername ?? undefined,
-      senderE164: attempt.senderE164 ?? undefined,
-      groupId: attempt.groupId ?? undefined,
-      groupChannel: attempt.groupChannel ?? undefined,
-      groupSpace: attempt.groupSpace ?? undefined,
-    },
-  };
   let live = true;
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
-  const direct = operation ? undefined : prepareReplyToolAuthority(input, narrow);
+  const direct = operation
+    ? undefined
+    : prepareReplyToolAuthority(
+        {
+          executionSelection: internal.executionSelection,
+          originatingChannel: attempt.messageChannel,
+          toolsAllow: attempt.toolsAllow,
+          disableTools: attempt.disableTools,
+          forceRestartSafeTools: attempt.forceRestartSafeTools,
+          forceCodeModeTools: attempt.forceCodeModeTools,
+          operatorAuthority,
+          run: {
+            ...attempt,
+            model: attempt.modelId,
+            elevatedLevel: attempt.bashElevated?.defaultLevel,
+            runtimePolicySessionKey: attempt.sandboxSessionKey,
+            traceAuthorized: false,
+            spawnedBy: attempt.spawnedBy ?? undefined,
+            senderId: attempt.senderId ?? undefined,
+            senderName: attempt.senderName ?? undefined,
+            senderUsername: attempt.senderUsername ?? undefined,
+            senderE164: attempt.senderE164 ?? undefined,
+            groupId: attempt.groupId ?? undefined,
+            groupChannel: attempt.groupChannel ?? undefined,
+            groupSpace: attempt.groupSpace ?? undefined,
+          },
+        },
+        narrow,
+      );
   let fingerprint: string | undefined;
   let releaseAttemptSnapshot: (() => void) | undefined;
   try {
@@ -214,7 +218,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   }
   const assertReplyActive = () => {
     assertActive();
-    input.operatorAuthority?.assertCurrent();
+    operatorAuthority?.assertCurrent();
     if (
       operation &&
       (operation.toolAuthorityRoute?.provider !== route.provider ||
@@ -247,7 +251,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         const questionAuthority = sessionKey
           ? createAgentQuestionAnswerAuthority({
               sessionKey,
-              requesterProfileId: input.operatorAuthority?.profileId,
+              requesterProfileId: operatorAuthority?.profileId,
               fingerprint,
               prepareCaller: async (caller) =>
                 prepareReplyToolAuthorityCallerRead(
