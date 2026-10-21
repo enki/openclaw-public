@@ -44,6 +44,7 @@ export const ChatHistoryParamsSchema = closedObject({
     closedObject({
       pendingInputs: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
       sessionInfo: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      commands: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     }),
   ),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
@@ -499,6 +500,7 @@ const ChatErrorDetailSchema = closedObject({
   model: ChatErrorDetailTextSchema,
   failoverReason: ChatErrorDetailTextSchema,
   providerRuntimeFailureKind: ChatErrorDetailTextSchema,
+  providerErrorCode: ChatErrorDetailTextSchema,
   providerErrorType: ChatErrorDetailTextSchema,
   httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
   providerErrorMessagePreview: ChatErrorDetailTextSchema,
@@ -524,6 +526,7 @@ export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | 
     model: readText(source.model),
     failoverReason: readText(source.failoverReason),
     providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
+    providerErrorCode: readText(source.providerErrorCode),
     providerErrorType: readText(source.providerErrorType),
     httpStatus:
       httpStatus !== undefined &&

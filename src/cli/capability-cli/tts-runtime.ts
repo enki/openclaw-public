@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -28,7 +27,7 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically } from "../media-output.js";
+import { writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
@@ -77,7 +76,7 @@ export async function runTtsConvert(params: {
     const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
     const ttsProvider =
       params.provider ??
-      resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider ??
+      resolveModelRefOverride(params.modelId).provider ??
       (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
@@ -95,18 +94,13 @@ export async function runTtsConvert(params: {
       voiceId: params.voiceId,
       channelId: params.channel,
     });
-    const hasExplicitSelection = Boolean(
-      overrides.provider ||
-      normalizeOptionalString(params.modelId) ||
-      normalizeOptionalString(params.voiceId),
-    );
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
       prefsPath,
       channel: params.channel,
       overrides,
-      disableFallback: hasExplicitSelection,
+      disableFallback: Boolean(overrides.provider),
     });
     if (!localResult.success || !localResult.audioPath) {
       throw new Error(localResult.error ?? "TTS conversion failed");
@@ -116,12 +110,15 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
-    const sourcePath = result.audioPath;
-    outputPath = path.resolve(params.output);
-    await publishOutputFileAtomically({
-      filePath: outputPath,
-      writeTemp: (tempPath) => fs.copyFile(sourcePath, tempPath),
+    // Match image/video outputs: the extension follows the audio actually returned.
+    const written = await writeOutputAsset({
+      buffer: await fs.readFile(result.audioPath),
+      outputPath: params.output,
+      outputIndex: 0,
+      outputCount: 1,
+      subdir: "tts",
     });
+    outputPath = written.path;
   }
   return {
     ok: true,

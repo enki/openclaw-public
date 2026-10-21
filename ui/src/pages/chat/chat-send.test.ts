@@ -44,6 +44,8 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
+  expectNoRpc,
+  expectRpc,
   findRequestPayload,
   makeChatHost,
   makeRequestMock,
@@ -124,14 +126,6 @@ function queuedMessage<T extends Partial<ChatQueueItem>>(id: string, text: strin
 
 function expectItems(actual: unknown, ...items: unknown[]): void {
   expect(actual).toEqual(items.map((item) => expect.objectContaining(item)));
-}
-
-function expectRpc(request: unknown, method: string, payload: unknown = expect.anything()): void {
-  expect(request).toHaveBeenCalledWith(method, payload, { timeoutMs: 30_000 });
-}
-
-function expectNoRpc(request: unknown, method: string, payload: unknown = expect.anything()): void {
-  expect(request).not.toHaveBeenCalledWith(method, payload, { timeoutMs: 30_000 });
 }
 
 function asChatPageHost(host: TestChatHost): ChatPageHost {
@@ -1034,7 +1028,7 @@ describe("handleSendChat", () => {
       settingsPatch.resolve(success);
       await send;
       if (success) {
-        expect(host.request).toHaveBeenCalledWith("chat.send", {
+        expectRpc(host.request, "chat.send", {
           sessionKey: "agent:main",
           message: "start over",
           queueMode: "interrupt",
@@ -1585,13 +1579,12 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([ownedOriginal]);
   });
 
-  it("keeps slash-command model changes in the canonical row and refreshes tools", async () => {
+  it("keeps slash-command model changes in the canonical row", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
     );
 
-    const refreshCurrentSessionTools = vi.fn();
     const host = makeChatHost({
       agentsList: { defaultId: "main", mainKey: "main" },
       requestHandlers: {
@@ -1623,7 +1616,6 @@ describe("handleSendChat", () => {
       },
       sessionKey: "main",
       chatMessage: "/model gpt-5-mini",
-      refreshCurrentSessionTools,
     });
 
     await handleSendChat(host);
@@ -1638,7 +1630,6 @@ describe("handleSendChat", () => {
       modelProvider: "openai",
       modelOverrideSource: "user",
     });
-    expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
   it.each(["error ACK", "transport rejection"] as const)(
@@ -2276,7 +2267,6 @@ describe("handleSendChat", () => {
     Object.assign(host, {
       connectionEpoch: 1,
       pendingSessionMessageReloadSessionKey: null,
-      requestUpdate: vi.fn(),
     });
     const selectedAdmission = captureChatOutboxAdmission(
       host,
@@ -2359,7 +2349,6 @@ describe("handleSendChat", () => {
         chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
-        requestUpdate: vi.fn(),
       });
     }
     cacheEmptyChatSnapshot(inactive, item.sessionKey);

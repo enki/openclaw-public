@@ -334,7 +334,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
+        if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {
@@ -553,6 +553,9 @@ async function buildTalkCatalog(
           }
           if (capabilities?.voicesByModel) {
             entry.voicesByModel = capabilities.voicesByModel;
+          }
+          if (capabilities?.modelFamilySettings) {
+            entry.modelFamilySettings = capabilities.modelFamilySettings;
           }
           if (provider.aliases?.length) {
             entry.aliases = [...provider.aliases];
