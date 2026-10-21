@@ -80,6 +80,7 @@ function startTurn(
     target?: SessionTarget;
     adapter?: SessionControllerSourceAdapter;
     direct?: boolean;
+    turnKind?: "direct";
   } = {},
 ) {
   const sessionKey = params.target?.sessionKey ?? key;
@@ -88,6 +89,7 @@ function startTurn(
     sessionKey,
     sessionId,
     resetTriggered: false,
+    turnKind: params.turnKind,
     target: params.target,
   });
   operation.setPhase("running");
@@ -202,10 +204,16 @@ function revocableAuthority(message: string) {
 }
 
 describe("submitSessionControllerSteer", () => {
-  it.each(["required", "optional"] as const)(
-    "preserves human input custody with a %s reply owner",
-    async (terminalReplyExpectation) => {
-      const { operation, input } = startTurn();
+  it.each([
+    { turnKind: undefined, terminalReplyExpectation: "required" },
+    { turnKind: undefined, terminalReplyExpectation: "optional" },
+    { turnKind: "direct", terminalReplyExpectation: "required" },
+    { turnKind: "direct", terminalReplyExpectation: "result-required" },
+    { turnKind: "direct", terminalReplyExpectation: "optional" },
+  ] as const)(
+    "preserves human input custody with a $turnKind $terminalReplyExpectation reply owner",
+    async ({ turnKind, terminalReplyExpectation }) => {
+      const { operation, input } = startTurn({ turnKind });
       const received: string[] = [];
       const fingerprint = "human-reply-contract-tools";
       operation.attachBackend({
@@ -229,7 +237,7 @@ describe("submitSessionControllerSteer", () => {
         "Answer this human correction",
       );
 
-      if (terminalReplyExpectation === "required") {
+      if (terminalReplyExpectation !== "optional") {
         expect(result).toMatchObject({
           status: "accepted",
           targetRunId: "human-reply-contract-run",

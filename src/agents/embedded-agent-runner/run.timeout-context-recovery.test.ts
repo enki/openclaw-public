@@ -123,7 +123,7 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
-    onCompactionHookMessages: vi.fn(async () => {}),
+    onCompactionHookMessages: vi.fn(),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
     adoptCompactionTranscript: vi.fn(async () => undefined),
