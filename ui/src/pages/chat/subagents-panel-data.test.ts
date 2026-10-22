@@ -455,9 +455,9 @@ describe("native observations in the Subagents panel owner", () => {
       }),
     );
     f.open();
-    await f.when(() => f.data.nativeRows.length === 1);
+    await f.when(() => f.data.nativeSnapshot?.children.length === 1);
     expect(f.data.rows).toEqual([]);
-    expect(f.data.nativeRows).toEqual(nativeSnapshot.children);
+    expect(f.data.nativeSnapshot?.children).toEqual(nativeSnapshot.children);
     expect(f.request).toHaveBeenCalledWith("sessions.describe", {
       key: parentKey,
       includeNativeSubagents: true,
@@ -491,14 +491,14 @@ describe("native observations in the Subagents panel owner", () => {
       f.open(otherParentKey);
     } else {
       f.connection.publish({ phase: "reconnecting" });
-      expect(f.data.nativeRows).toEqual([]);
+      expect(f.data.nativeSnapshot?.children).toBeUndefined();
       f.connection.publish({ phase: "connected" });
     }
     await vi.waitFor(() => expect(reads).toBe(2));
     blocked.resolve({ session: nativeParent, nativeSubagents: nativeSnapshot });
     await blocked.promise;
     await Promise.resolve();
-    expect(f.data.nativeRows).toEqual([]);
+    expect(f.data.nativeSnapshot?.children).toEqual([]);
   });
 
   it.each(["missing", "denied"])(
@@ -519,11 +519,10 @@ describe("native observations in the Subagents panel owner", () => {
         },
       );
       f.open();
-      await f.when(() => f.data.nativeRows.length === 1);
+      await f.when(() => f.data.nativeSnapshot?.children.length === 1);
       allowed = false;
       await f.data.refresh();
       expect(f.data.nativeSnapshot).toBeUndefined();
-      expect(f.data.nativeRows).toEqual([]);
       expect(Boolean(f.data.nativeError)).toBe(outcome === "denied");
     },
   );
@@ -547,7 +546,6 @@ describe("native observations in the Subagents panel owner", () => {
     await blocked.promise;
     await Promise.resolve();
     expect(f.data.nativeSnapshot).toBeUndefined();
-    expect(f.data.nativeRows).toEqual([]);
   });
 
   it("polls only while visible and retires pending reads on disposal", async () => {
@@ -573,7 +571,7 @@ describe("native observations in the Subagents panel owner", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     onTestFinished(() => visibility.mockRestore());
     document.dispatchEvent(new Event("visibilitychange"));
-    expect(f.data.nativeRows).toEqual([]);
+    expect(f.data.nativeSnapshot?.children).toBeUndefined();
     await vi.advanceTimersByTimeAsync(15_000);
     expect(reads()).toBe(2);
     visibility.mockReturnValue("visible");
@@ -581,7 +579,7 @@ describe("native observations in the Subagents panel owner", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(reads()).toBe(3);
     f.data.dispose();
-    expect(f.data.nativeRows).toEqual([]);
+    expect(f.data.nativeSnapshot?.children).toBeUndefined();
     await vi.advanceTimersByTimeAsync(15_000);
     expect(reads()).toBe(3);
   });

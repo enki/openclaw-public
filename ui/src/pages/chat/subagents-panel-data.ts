@@ -89,10 +89,6 @@ export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
   nativeSnapshot: NativeSubagentsSnapshot | undefined;
   nativeError: string | null = null;
-
-  get nativeRows(): NativeSubagentsSnapshot["children"] {
-    return this.nativeSnapshot?.children ?? [];
-  }
   loading = false;
   error: string | null = null;
   hasResult = false;
