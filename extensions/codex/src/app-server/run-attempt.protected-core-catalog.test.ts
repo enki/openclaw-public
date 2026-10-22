@@ -136,7 +136,6 @@ describe("runCodexAppServerAttempt", () => {
             nativeToolSurfaceEnabled,
           });
           const registered = await buildDynamicDeclarationsForTest(turn, workspaceDir, {
-            forceHeartbeatTool: true,
             ignoreDisableMessageTool: true,
             ignoreRuntimePlan: true,
             nativeToolSurfaceEnabled,

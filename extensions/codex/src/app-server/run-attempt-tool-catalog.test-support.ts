@@ -14,10 +14,13 @@ function dynamicToolInputForTest(
   options: Partial<
     Pick<
       Parameters<typeof buildDynamicTools>[0],
-      | "forceHeartbeatTool"
       | "ignoreDisableMessageTool"
       | "ignoreRuntimePlan"
       | "nativeToolSurfaceEnabled"
+      | "pluginConfig"
+      | "effectiveCwd"
+      | "effectiveWorkspace"
+      | "sandbox"
     >
   > = {},
 ) {

@@ -31,6 +31,7 @@ import {
   collectAgentHarnessMessagingMediaUrls,
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
+  createGatewayToolPolicyAssertion,
   extractMessagingToolSourceReplyPayload,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
@@ -42,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   asNonArrayRecord,
   asOptionalRecord,
@@ -80,7 +82,11 @@ import {
   applyCurrentMessageProvider,
   resolveCodexToolResultSourceReply,
 } from "./dynamic-tool-source-reply.js";
-import type { CodexDynamicToolCallParams, CodexDynamicToolSpec } from "./protocol.js";
+import type {
+  CodexDynamicToolCallParams,
+  CodexDynamicToolFunctionSpec,
+  CodexDynamicToolSpec,
+} from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
   prepareCodexRemoteWorkspaceMessageMedia,
@@ -142,7 +148,6 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
-  registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   assertCurrent?: () => void;
@@ -164,7 +169,7 @@ export function createCodexDynamicToolBridge(params: {
     params.hookContext,
   );
   const registeredProjection = params.registeredTools
-    ? projectCodexDynamicTools(params.registeredTools)
+    ? projectCodexDynamicTools(params.registeredTools, { config: params.hookContext?.config })
     : availableProjection;
   // Accepted thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
@@ -177,20 +182,8 @@ export function createCodexDynamicToolBridge(params: {
   const currentEntries = availableProjection.tools.filter((entry) =>
     registrationNames.has(entry.name),
   );
-  const currentNames = new Set(currentEntries.map((entry) => entry.name));
-  const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
-    params.registeredFallbackTools ?? [],
-    params.hookContext,
-  );
-  const fallbackEntries = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !currentNames.has(entry.name),
-  );
-  const finalized = finalizeCodexToolAvailability(
-    [...currentEntries, ...fallbackEntries],
-    inheritedSpecs,
-  );
-  const availableTools = finalized.tools.filter((entry) => currentNames.has(entry.name));
-  const registeredFallbackTools = finalized.tools.filter((entry) => !currentNames.has(entry.name));
+  const finalized = finalizeCodexToolAvailability(currentEntries, inheritedSpecs);
+  const availableTools = finalized.tools;
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);
@@ -203,11 +196,18 @@ export function createCodexDynamicToolBridge(params: {
     }
   }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
-  const executionToolMap = new Map([
-    ...registeredFallbackTools.map((entry) => [entry.name, entry] as const),
-    ...toolMap,
-  ]);
+  const toolMap = new Map(
+    availableTools.map((entry) => [
+      entry.name,
+      {
+        ...entry,
+        assertGatewayToolPolicy: createGatewayToolPolicyAssertion(
+          entry.tool,
+          params.hookContext?.config,
+        ),
+      },
+    ]),
+  );
   const quarantinedAvailableToolNames = new Set(
     availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
@@ -220,7 +220,6 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
-    ...registeredFallbackProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
   reportQuarantinedDynamicTools({
@@ -265,6 +264,17 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
       functionToolsOnly: params.functionToolsOnly,
     });
+  // Keep saved declarations fingerprinted, and preserve their schemas when no
+  // Gateway policy applies. The managed view uses already-filtered concrete
+  // tools so genuine discovery controls retain their private identity.
+  const hasGatewayToolPolicy = Boolean(
+    params.hookContext?.config?.tools?.gatewayPolicy ||
+    getRuntimeConfigSnapshot()?.tools?.gatewayPolicy,
+  );
+  const availableInheritedFunction = (spec: CodexDynamicToolFunctionSpec) => {
+    const entry = toolMap.get(spec.name);
+    return entry ? [hasGatewayToolPolicy ? { ...spec, inputSchema: entry.inputSchema } : spec] : [];
+  };
   const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: RemoteWorkspaceFileReader | undefined;
   return {
@@ -272,9 +282,9 @@ export function createCodexDynamicToolBridge(params: {
     availableSpecs: inheritedSpecs
       ? inheritedSpecs.flatMap<CodexDynamicToolSpec>((spec) => {
           if (spec.type === "function") {
-            return toolMap.has(spec.name) ? [spec] : [];
+            return availableInheritedFunction(spec);
           }
-          const tools = spec.tools.filter((tool) => toolMap.has(tool.name));
+          const tools = spec.tools.flatMap(availableInheritedFunction);
           return tools.length ? [{ ...spec, tools }] : [];
         })
       : createCodexDynamicToolSpecs({
@@ -309,7 +319,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName,
           toolCallOrdinal: options?.toolCallOrdinal,
         });
-      const toolEntry = executionToolMap.get(call.tool);
+      const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
@@ -391,13 +401,17 @@ export function createCodexDynamicToolBridge(params: {
               : undefined,
           };
         },
-        shouldValidateArguments: () => getPluginToolMeta(tool)?.mcp?.operation !== "tool",
-        validateArguments: (value) =>
+        validateArguments: (value) => {
+          toolEntry.assertGatewayToolPolicy(value);
+          if (getPluginToolMeta(tool)?.mcp?.operation === "tool") {
+            return;
+          }
           assertCodexDynamicToolInputMatchesSchema({
             toolName,
             schema: toolEntry.inputSchema,
             value,
-          }),
+          });
+        },
         beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {
           rawIsErrorForPresentation = rawIsError;
           const messageDelivery = readEmbeddedMessageDeliveryFact(
@@ -681,13 +695,11 @@ export function projectCodexExecutableDynamicTools(params: {
   hookContext?: CodexDynamicToolHookContext;
 }): {
   availableTools: AnyAgentTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
   const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
     availableTools: finalized.tools.map((entry) => entry.tool),
-    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 

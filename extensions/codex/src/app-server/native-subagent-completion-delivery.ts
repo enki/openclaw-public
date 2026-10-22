@@ -1,6 +1,5 @@
 import { isDurableAgentHarnessCompletionDelivery } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import {
   codexNativeSubagentRunId,
   readCodexNativeSubagentRunId,
@@ -19,7 +18,13 @@ type CompletionDeliveryDependencies = {
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
-  assignments: () => Pick<CodexNativeSubagentAssignmentInventory, "abandon" | "drain">;
+  drainAssignments: (state: ParentState) => Promise<void>;
+  abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
+  settleNestedCompletion: (
+    state: ParentState,
+    child: ChildState,
+    assertCurrent: () => void,
+  ) => Promise<boolean>;
   releaseClientRetentionIfIdle: () => void;
 };
 
@@ -67,7 +72,23 @@ export class CodexNativeSubagentCompletionDelivery {
       // Terminal observation queues its locator before completion admission.
       // Wait for that owner's committed publication; its prepared read must
       // continue to deny affected writes while they are pending.
-      await this.dependencies.assignments().drain(state);
+      await this.dependencies.drainAssignments(state);
+      if (!this.isCurrent(state, childState) || childState.pendingCompletion !== completion) {
+        return;
+      }
+      if (
+        await this.dependencies.settleNestedCompletion(state, childState, () => {
+          if (
+            !this.isCurrent(state, childState) ||
+            (childState.completionCustody && !childState.completionCustody.isCurrent())
+          ) {
+            throw new Error("Native completion acknowledgement is no longer current.");
+          }
+        })
+      ) {
+        this.dependencies.unregisterChild(childState);
+        return;
+      }
       if (!this.isCurrent(state, childState) || childState.pendingCompletion !== completion) {
         return;
       }
@@ -255,7 +276,7 @@ export class CodexNativeSubagentCompletionDelivery {
   private async abandon(state: ParentState, child: ChildState): Promise<void> {
     child.completionDeliveryAbandoned = true;
     try {
-      await this.dependencies.assignments().abandon(state, child, () => {
+      await this.dependencies.abandon(state, child, () => {
         if (
           child.nativeCompletionDelivered ||
           !this.isCurrent(state, child) ||

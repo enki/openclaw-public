@@ -64,6 +64,8 @@ describe("native completion durable receipts", () => {
       // the admitted registration before releasing that write and joining ready.
       await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
       release.resolve();
+      // Restoration drains the retirement write, so release the test gate before awaiting it.
+      await observer.ready;
       await retirement;
       await observer.ready;
       await observer.unregister();
@@ -169,7 +171,6 @@ describe("native completion settlement", () => {
       });
       const releasePin = vi.fn();
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         retainParentThread: () => releasePin,
       });
       const parent = await registerParent(monitor);

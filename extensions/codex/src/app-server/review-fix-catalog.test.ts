@@ -32,13 +32,9 @@ function fixture() {
   return { execute, tool, tools, fingerprint: codexDynamicToolsFingerprint(tools) };
 }
 
-it.each(
-  ["active", "fallback"].flatMap((kind) =>
-    ["schema", "description"].map((change) => ({ kind, change })),
-  ),
-)(
-  "rejects changed $kind $change declarations with valid arguments before effects",
-  async ({ kind, change }) => {
+it.each(["schema", "description"])(
+  "rejects changed %s declarations with valid arguments before effects",
+  async (change) => {
     const { execute, tool, tools } = fixture();
     const changed = {
       ...tool,
@@ -59,8 +55,7 @@ it.each(
       ).toBe(true);
     }
     const bridge = createCodexDynamicToolBridge({
-      tools: kind === "active" ? [changed] : [],
-      registeredFallbackTools: kind === "fallback" ? [changed] : [],
+      tools: [changed],
       registeredSpecs: tools,
       signal: new AbortController().signal,
     });
@@ -101,30 +96,26 @@ it.each([null, { version: 4, tools: [] }, { version: 3, tools: [] }])(
   },
 );
 
-it.each(["active", "fallback"])(
-  "executes an unchanged %s declaration with reordered schema keys",
-  async (kind) => {
-    const { execute, tool, tools } = fixture();
-    const reordered = { ...tool, parameters: { properties: {}, type: "object" } };
-    const bridge = createCodexDynamicToolBridge({
-      tools: kind === "active" ? [reordered] : [],
-      registeredFallbackTools: kind === "fallback" ? [reordered] : [],
-      registeredSpecs: tools,
-      signal: new AbortController().signal,
-    });
-    expect(bridge.specs).toEqual(tools);
-    expect(
-      await bridge.handleToolCall({
-        threadId: "accepted",
-        turnId: "current",
-        callId: "allowed",
-        tool: tool.name,
-        arguments: {},
-      }),
-    ).toMatchObject({ success: true });
-    expect(execute).toHaveBeenCalledOnce();
-  },
-);
+it("executes an unchanged declaration with reordered schema keys", async () => {
+  const { execute, tool, tools } = fixture();
+  const reordered = { ...tool, parameters: { properties: {}, type: "object" } };
+  const bridge = createCodexDynamicToolBridge({
+    tools: [reordered],
+    registeredSpecs: tools,
+    signal: new AbortController().signal,
+  });
+  expect(bridge.specs).toEqual(tools);
+  expect(
+    await bridge.handleToolCall({
+      threadId: "accepted",
+      turnId: "current",
+      callId: "allowed",
+      tool: tool.name,
+      arguments: {},
+    }),
+  ).toMatchObject({ success: true });
+  expect(execute).toHaveBeenCalledOnce();
+});
 
 it("preserves receiptless legacy and native supervision with equal fingerprints", async () => {
   const { tools, fingerprint } = fixture();
