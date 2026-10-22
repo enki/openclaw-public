@@ -70,7 +70,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const sessionKey = "agent:main:pr-handoff";
         const sessionId = "pr-handoff";
         const runId = "pr-handoff-run";
-        const scopes: OperatorScope[] = ["operator.read", "operator.sessions.write"];
+        const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
           agents: {
             entries: { main: { workspace: state.workspaceDir } },
@@ -163,7 +163,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               JSON.stringify(admitted.requester.snapshot),
             ).toMatchObject({
               actor: { kind: "operator", profileId },
-              scopes: ["operator.sessions.write"],
+              scopes,
             });
             expect(options.params).toMatchObject({ sessionKey, idempotencyKey: "resumed-publish" });
             options.respond(true, { status: "requested", requestId: "synthetic-publication" });
@@ -207,15 +207,15 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             "resumed guest caller",
           );
           await withGatewayToolCallerIdentity(caller, async () => {
+            expect(
+              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
+            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
             await expect(
               callAgentToolGatewayRequest({
                 method: "tools.effective",
                 params: { agentId: "main", sessionKey },
               }),
-            ).resolves.toEqual({ admitted: true });
-            expect(
-              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
-            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
+            ).rejects.toThrow("operator.read");
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
             ).rejects.toThrow("operator.admin");
@@ -388,7 +388,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                               executionStarted: true,
                             });
                             expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-                            expect(inspect).toHaveBeenCalledOnce();
+                            expect(inspect).not.toHaveBeenCalled();
                             expect(publish).toHaveBeenCalledOnce();
                             expect(admin).not.toHaveBeenCalled();
                           }
