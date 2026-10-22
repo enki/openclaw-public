@@ -280,7 +280,6 @@ src/channels/plugins/setup-wizard-helpers.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
-src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
@@ -501,7 +500,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/skills/index.test.ts
-ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
@@ -509,8 +507,5 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
-ui/src/pages/config/config-page.ts
-ui/src/pages/sessions/sessions-page.ts
 ui/src/test-helpers/control-ui-e2e.ts

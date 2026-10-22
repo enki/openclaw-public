@@ -60,8 +60,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   switch (controlUiBootManifestKey(id)) {
     case "node_modules/@solidjs/signals/dist/prod/deferred.js":
-      // Only lazy resource consumers need this scheduler hook.
-      return "solid-deferred-runtime";
+      // Route readers share this hook below without adding it to eager Solid code.
+      return undefined;
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/lib/device-pair-setup.ts":
@@ -77,8 +77,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
     case "ui/src/i18n/locales/en-chat-composer.ts":
-    case "ui/src/i18n/locales/en-chat-session.ts":
-      // Share deferred English compression without combining either route's renderers.
+      // New Session shares composer copy; session copy stays with Chat's boot group.
       return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
@@ -196,6 +195,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               if (route === "shared") {
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
+                // Both routes read deferred resources; share their existing boot partition.
+                modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
               }
               return {
                 name: `control-ui-boot-${route}`,
