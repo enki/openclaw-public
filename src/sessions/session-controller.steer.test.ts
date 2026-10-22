@@ -441,6 +441,8 @@ describe("submitSessionControllerSteer", () => {
     const released: NonNullable<AgentHarnessAttemptParams["replyOperation"]> = operation;
     const internal = readSessionControllerOperationState(operation);
     expect(released).toMatchObject({ phase: "running", result: null });
+    expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
+    expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
 
     expect(operation.yield()).toBe(true);
     expect(operation.yield()).toBe(false);
@@ -458,6 +460,7 @@ describe("submitSessionControllerSteer", () => {
     const completed = released.result;
     expect(released.result).toBe(completed);
     expect(internal?.phase).toBe("yielded");
+    expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
 
   it.each(["stop", "failure"] as const)(
@@ -729,13 +732,5 @@ describe("steerSessionControllerOperation", () => {
       reason: "no_active_run",
     });
     expectNoInput(input);
-  });
-  it("resolves the slot-owning operation by its backend run ID only while it owns the slot", () => {
-    const { operation } = startTurn();
-
-    expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
-    expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
-    operation.complete();
-    expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
 });

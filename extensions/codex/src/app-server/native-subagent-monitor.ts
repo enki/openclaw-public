@@ -216,7 +216,6 @@ class Monitor {
       reconcileChildState: (child) => this.reconcileChildState(child),
       processCompletion: (state, child, completion, eventAt) =>
         this.processCompletion(state, child, completion, eventAt),
-      recoveryPollDelaysMs: options.recoveryPollDelaysMs,
     });
     this.removeNotificationHandler = client.addNotificationHandler(async (notification) => {
       if (!NATIVE_SUBAGENT_NOTIFICATION_METHODS.has(notification.method)) {
@@ -293,7 +292,6 @@ class Monitor {
       recordPendingAssignment: (state, receipt, nativeParentThreadId) =>
         this.assignments.recordSubmission(state, receipt, nativeParentThreadId),
       onSettled: (state) => this.pruneParentIfUnused(state),
-      recoveryPollDelaysMs: options.recoveryPollDelaysMs,
     });
     this.assignments = new CodexNativeSubagentAssignmentInventory({
       assertCurrent: (state) => {
