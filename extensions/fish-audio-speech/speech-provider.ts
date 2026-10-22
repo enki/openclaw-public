@@ -65,11 +65,10 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
   response: Response;
   release: () => Promise<void>;
 }> {
-  const baseUrl = normalizeFishAudioBaseUrl(params.baseUrl);
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   return await fetchWithSsrFGuard({
-    url: `${baseUrl}/v1/tts`,
+    url: `${params.baseUrl}/v1/tts`,
     init: {
       method: "POST",
       headers: {
@@ -90,7 +89,7 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
       }),
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     auditContext: "fish-audio.tts",
   });
 }
@@ -100,7 +99,9 @@ async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
       maxBytes: params.maxBytes,
     });
@@ -119,7 +120,9 @@ async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
     if (!response.body) {
       throw new Error("Fish Audio TTS API response missing audio stream");
@@ -159,81 +162,6 @@ function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
     locale: languages[0],
     personalities: tags.length > 0 ? tags : undefined,
   };
-}
-
-async function requestVoicePage(params: {
-  apiKey: string;
-  baseUrl: string;
-  timeoutMs: number;
-  self: boolean;
-  pageNumber: number;
-}): Promise<FishAudioVoicePayload> {
-  const url = new URL(`${normalizeFishAudioBaseUrl(params.baseUrl)}/model`);
-  url.searchParams.set("type", "tts");
-  url.searchParams.set("page_size", String(FISH_AUDIO_VOICE_PAGE_SIZE));
-  url.searchParams.set("page_number", String(params.pageNumber));
-  if (params.self) {
-    url.searchParams.set("self", "true");
-  } else {
-    url.searchParams.set("sort_by", "score");
-  }
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
-    await import("openclaw/plugin-sdk/provider-http");
-  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
-    await import("openclaw/plugin-sdk/ssrf-runtime");
-  const { response, release } = await fetchWithSsrFGuard({
-    url: url.toString(),
-    init: { headers: { Authorization: `Bearer ${params.apiKey}` } },
-    timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
-    auditContext: "fish-audio.voices",
-  });
-  try {
-    await assertOkOrThrowProviderError(response, "Fish Audio voices API error");
-    return await readProviderJsonResponse<FishAudioVoicePayload>(response, "Fish Audio voices", {
-      maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
-    });
-  } finally {
-    await release();
-  }
-}
-
-async function listFishAudioVoices(params: {
-  apiKey: string;
-  baseUrl: string;
-  timeoutMs: number;
-}): Promise<SpeechVoiceOption[]> {
-  const own: SpeechVoiceOption[] = [];
-  for (let pageNumber = 1; pageNumber <= FISH_AUDIO_MAX_OWN_VOICE_PAGES; pageNumber += 1) {
-    const payload = await requestVoicePage({ ...params, self: true, pageNumber });
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    own.push(...items.flatMap((item) => parseVoiceItem(item) ?? []));
-    if (
-      items.length < FISH_AUDIO_VOICE_PAGE_SIZE ||
-      own.length >= (payload.total ?? Number.MAX_SAFE_INTEGER)
-    ) {
-      break;
-    }
-  }
-
-  let publicVoices: SpeechVoiceOption[] = [];
-  try {
-    const payload = await requestVoicePage({ ...params, self: false, pageNumber: 1 });
-    publicVoices = (Array.isArray(payload.items) ? payload.items : []).flatMap(
-      (item) => parseVoiceItem(item) ?? [],
-    );
-  } catch {
-    // Own voices remain useful when the public catalog is temporarily unavailable.
-  }
-
-  const seen = new Set<string>();
-  return [...own, ...publicVoices].filter((voice) => {
-    if (seen.has(voice.id)) {
-      return false;
-    }
-    seen.add(voice.id);
-    return true;
-  });
 }
 
 const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
@@ -491,10 +419,76 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("Fish Audio API key missing");
       }
-      return await listFishAudioVoices({
-        apiKey,
-        baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl),
-        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      const baseUrl = normalizeFishAudioBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl);
+      const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const requestVoicePage = async (self: boolean, pageNumber: number) => {
+        const url = new URL(`${baseUrl}/model`);
+        url.searchParams.set("type", "tts");
+        url.searchParams.set("page_size", String(FISH_AUDIO_VOICE_PAGE_SIZE));
+        url.searchParams.set("page_number", String(pageNumber));
+        if (self) {
+          url.searchParams.set("self", "true");
+        } else {
+          url.searchParams.set("sort_by", "score");
+        }
+        const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+          await import("openclaw/plugin-sdk/provider-http");
+        const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+          await import("openclaw/plugin-sdk/ssrf-runtime");
+        const requestHeaders = { Authorization: `Bearer ${apiKey}` };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: url.toString(),
+          init: { headers: requestHeaders },
+          timeoutMs,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+          auditContext: "fish-audio.voices",
+        });
+        try {
+          await assertOkOrThrowProviderError(response, "Fish Audio voices API error", {
+            requestHeaders,
+          });
+          return await readProviderJsonResponse<FishAudioVoicePayload>(
+            response,
+            "Fish Audio voices",
+            {
+              maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
+              requestHeaders,
+            },
+          );
+        } finally {
+          await release();
+        }
+      };
+      const own: SpeechVoiceOption[] = [];
+      for (let pageNumber = 1; pageNumber <= FISH_AUDIO_MAX_OWN_VOICE_PAGES; pageNumber += 1) {
+        const payload = await requestVoicePage(true, pageNumber);
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        own.push(...items.flatMap((item) => parseVoiceItem(item) ?? []));
+        if (
+          items.length < FISH_AUDIO_VOICE_PAGE_SIZE ||
+          own.length >= (payload.total ?? Number.MAX_SAFE_INTEGER)
+        ) {
+          break;
+        }
+      }
+
+      let publicVoices: SpeechVoiceOption[] = [];
+      try {
+        const payload = await requestVoicePage(false, 1);
+        publicVoices = (Array.isArray(payload.items) ? payload.items : []).flatMap(
+          (item) => parseVoiceItem(item) ?? [],
+        );
+      } catch {
+        // Own voices remain useful when the public catalog is temporarily unavailable.
+      }
+
+      const seen = new Set<string>();
+      return [...own, ...publicVoices].filter((voice) => {
+        if (seen.has(voice.id)) {
+          return false;
+        }
+        seen.add(voice.id);
+        return true;
       });
     },
     // Retained for synchronous SDK consumers through 2026-12-31.

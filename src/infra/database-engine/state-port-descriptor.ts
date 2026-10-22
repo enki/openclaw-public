@@ -8,6 +8,8 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { ensureAgentDeletionJournalPhaseSchema } from "../../state/openclaw-state-db-schema-additive.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
@@ -35,21 +37,18 @@ export async function loadStatePortDescriptor(
       return backup;
     }
     // v28 appends publication draft choices; v24-v26 additionally retain older indexes.
-    // Pin these predecessor shapes so later column changes need their own descriptor.
+    // v29 removes credential tables; v30 only fences automation policies.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 29 ||
-      ![24, 25, 26, 27, 28].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 30 ||
+      ![24, 25, 26, 27, 28, 29].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
   }
-  const source =
-    sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION
-      ? statePostgresRuntime.clientCredentialSource
-      : undefined;
+  const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const isColumn = (
     fact: (typeof statePostgresRuntime.expectedCatalog)[number],
@@ -138,7 +137,22 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      return { version, migrationRequired: false, pendingColumns: {} };
+      const needsPhaseColumn =
+        tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
+        !tableHasColumn(db, "agent_deletion_journal", "phase");
+      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
+        ? { agent_deletion_journal: ["phase"] }
+        : {};
+      // First-use columns are valid absent; porting completes them in its private copy.
+      return { version, migrationRequired: false, pendingColumns };
+    },
+    migrateSqliteSource(file, _version, assertCurrent) {
+      using db = openNodeSqliteDatabase(file);
+      admitSqliteSchema(db);
+      if (tableHasColumn(db, "agent_deletion_journal", "agent_id")) {
+        assertCurrent();
+        ensureAgentDeletionJournalPhaseSchema(db);
+      }
     },
     async admit(file, input) {
       // Historical SQLite images use their descriptor; restored PG anchors still
@@ -169,7 +183,7 @@ export async function loadStatePortDescriptor(
     return descriptor;
   }
   if (sourceVersion >= 27) {
-    return { ...descriptor, inspectSqliteSource: undefined };
+    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
   }
   const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
@@ -190,5 +204,6 @@ export async function loadStatePortDescriptor(
         : fact,
     ),
     inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
   };
 }

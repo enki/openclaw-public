@@ -124,6 +124,7 @@ export function mountBoardPanel(
 export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly updateComplete: Promise<boolean>;
   readonly element: HTMLElement;
+  readonly headerElement: HTMLElement | null;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
@@ -242,7 +243,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     row: GatewaySessionRow,
     workspaceRoot: string | null,
     branch: string | null,
-    copy?: (value: string) => Promise<boolean>,
   ) => void;
   loadHeaderMenuData: (
     row: GatewaySessionRow,
@@ -362,7 +362,6 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
           agentId: null,
           name: "Assistant",
           avatar: null,
-          avatarSource: null,
           avatarStatus: null,
           avatarReason: null,
         },
@@ -473,6 +472,11 @@ export function createSessionContext(
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,
       },
+    },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => {},
     },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },

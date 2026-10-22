@@ -53,8 +53,10 @@ current working directory, unless an absolute PATH entry explicitly names their
 directory. OpenClaw's own private recovery directory is also allowed, so cached
 runtime reuse and the installation offer work when you launch from your home
 directory. This exception does not extend to other in-home executables or manager
-roots. On Windows, the service reader honors recorded code pages and Unicode
-byte-order marks. If the current Node build cannot decode a service script safely,
+roots. The POSIX root directory (`/`), where launchd jobs and system services
+commonly start, is not treated as a workspace. Windows drive and share roots keep
+the workspace checks. On Windows, the service reader honors recorded code pages
+and Unicode byte-order marks. If the current Node build cannot decode a service script safely,
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
@@ -168,9 +170,10 @@ fnm use 26
 
 ### Homebrew upgrades while the Gateway is running
 
-If Homebrew removes the running Gateway's Node executable, command relays and
-their process-group anchors use the formula's available stable Homebrew path for
-new launches. They keep using the original executable while it exists. Workers
+If Homebrew removes the running Gateway's Node executable, command relays,
+their process-group anchors, and managed Codex JavaScript launchers use the
+formula's available stable Homebrew path for new launches without searching
+`PATH`. They keep using the original executable while it exists. Workers
 that share native modules or V8 messages, including the spawn broker, keep the
 exact runtime and report a restart action if it is gone. Restart the Gateway
 after upgrading Node to move the Gateway itself onto the new runtime.
