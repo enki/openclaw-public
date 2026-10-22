@@ -139,9 +139,8 @@ export async function startGatewayTailscaleExposure(params: {
   }
 
   const recoveryAbort = new AbortController();
-  const recoverySignal = params.signal
-    ? AbortSignal.any([params.signal, recoveryAbort.signal])
-    : recoveryAbort.signal;
+  // Startup retires after the close handle is published; cleanup owns the live route.
+  const recoverySignal = recoveryAbort.signal;
   let reclaiming: Promise<void> | undefined;
   let recoveryFailure: AggregateError | undefined;
   const recoverRoute = async () => {

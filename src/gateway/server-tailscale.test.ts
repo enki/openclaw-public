@@ -275,7 +275,13 @@ describe("managed Tailscale claim recovery", () => {
       mocks.claimTailscaleRoute.mockResolvedValueOnce(original).mockResolvedValueOnce(replacement);
       mocks.getTailnetHostname.mockResolvedValue("fixture.tailnet.ts.net");
       mocks.getTailnetHostnameAfterServe.mockResolvedValue("fixture.tailnet.ts.net");
-      const cleanup = await startGatewayTailscaleExposure({ tailscaleMode: mode });
+      const startup = new AbortController();
+      const cleanup = await startGatewayTailscaleExposure({
+        tailscaleMode: mode,
+        signal: startup.signal,
+      });
+      // The CLI retires startup operations after publishing the server close handle.
+      startup.abort();
       try {
         const previous = getTailscalePublishedOrigin();
         expect(previous?.origin).toBe("https://fixture.tailnet.ts.net");

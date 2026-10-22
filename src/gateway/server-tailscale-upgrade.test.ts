@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewayStartupOperations } from "../cli/gateway-cli/run-loop-startup.js";
 import { captureEnv } from "../test-utils/env.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
@@ -57,12 +58,18 @@ describe("managed Tailscale upgrade", () => {
     };
   });
 
-  const expose = async (mode: "serve" | "funnel", port = 18789, info = vi.fn()) =>
+  const expose = async (
+    mode: "serve" | "funnel",
+    port = 18789,
+    info = vi.fn(),
+    signal?: AbortSignal,
+  ) =>
     (cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: mode,
       port,
       backend: { host: "127.0.0.1", port: 19000 },
       logTailscale: { info, warn: () => undefined },
+      signal,
     }));
 
   it.each([
@@ -126,7 +133,9 @@ describe("managed Tailscale upgrade", () => {
           .split("\n")
           .map((line) => JSON.parse(line) as { pid: number; target: string });
       const gatewayPid = process.pid;
-      await expose(mode);
+      const startup = createGatewayStartupOperations();
+      await startup.run((signal) => expose(mode, 18789, vi.fn(), signal));
+      startup.close();
       const originalClaims = await readClaims();
       expect(originalClaims).toHaveLength(1);
       const original = originalClaims[0]!;
