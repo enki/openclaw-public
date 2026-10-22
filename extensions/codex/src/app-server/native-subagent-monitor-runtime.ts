@@ -105,9 +105,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
         }
         await entry.ownership.release(threadId);
         clearReleaseRetry(entry);
-        if (childThreadOwnership.get(threadId) === entry) {
-          childThreadOwnership.delete(threadId);
-        }
+        childThreadOwnership.delete(threadId);
       };
       const scheduleReleaseRetry = (threadId: string, entry: ChildThreadOwnership) => {
         if (childThreadOwnership.get(threadId) !== entry || entry.releaseRetryTimer !== undefined) {

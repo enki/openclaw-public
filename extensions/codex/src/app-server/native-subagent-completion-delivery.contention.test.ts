@@ -56,13 +56,12 @@ describe("native completion durable receipts", () => {
       retirement = parent.unregister();
       await entered.promise;
       observer = await f.register(client);
-      // Recovery readiness drains the retirement write held above. Native receipts
-      // can arrive before that drain finishes; no new execution starts here.
       observer.bindTurn("observer-turn");
       await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
       release.resolve();
-      await retirement;
+      // Restoration drains the retirement write, so release the test gate before awaiting it.
       await observer.ready;
+      await retirement;
       await observer.unregister();
       expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
         [],
@@ -151,7 +150,6 @@ describe("native completion settlement", () => {
       });
       const releasePin = vi.fn();
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         retainParentThread: () => releasePin,
       });
       const parent = await registerParent(monitor);
