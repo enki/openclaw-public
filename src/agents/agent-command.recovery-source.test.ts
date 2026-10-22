@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
+import { prepareSteeringDelivery } from "../auto-reply/reply/steering-delivery-preparation.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -87,5 +88,93 @@ it.each([false, true])(
     );
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["settled", "unresolved", "terminal-pending"] as const)(
+  "keeps direct command steering bound to its admitted claim with predecessor custody %s",
+  async (predecessor) => {
+    const { loadSessionEntry, replaceSessionEntry } = compactionTestRuntime;
+    const sessionId = "reused-child-session";
+    const sessionKey = "agent:main:dashboard:reused-child";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    const previousRunId = "previous-child-command";
+    const runId = "next-child-command";
+    await replaceSessionEntry(target, {
+      sessionId,
+      lifecycleRevision: "same-child-incarnation",
+      updatedAt: 1,
+      spawnDepth: 1,
+      status: "done",
+      lastRunId: previousRunId,
+      restartRecoveryDeliveryRunId: previousRunId,
+      restartRecoveryDeliverySourceRunId: previousRunId,
+      restartRecoveryDeliveryRequestFingerprint: "previous-request-fingerprint",
+      restartRecoverySourceIngress: "internal",
+      ...(predecessor !== "unresolved" ? { restartRecoveryTerminalRunIds: [previousRunId] } : {}),
+      ...(predecessor === "terminal-pending"
+        ? { restartRecoveryDeliveryReceiptState: "terminal-pending" as const }
+        : {}),
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async () => {
+      const current = loadSessionEntry(target);
+      const delivery = prepareSteeringDelivery({
+        ...target,
+        sessionId,
+        sourceTurnId: runId,
+        entry: current,
+        assertCurrent() {},
+      });
+      try {
+        if (predecessor === "settled") {
+          expect(current).toMatchObject({
+            restartRecoveryDeliveryRunId: runId,
+            restartRecoveryDeliverySourceRunId: runId,
+            restartRecoveryTerminalRunIds: [previousRunId],
+          });
+          expect(current?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+          await expect(delivery.prepareCurrent()).resolves.toBeUndefined();
+          expect(() => delivery.assertCurrent()).not.toThrow();
+        } else {
+          // An unresolved source or terminal send keeps its claim even when
+          // another command runs; a tombstone alone cannot settle that send.
+          expect(current).toMatchObject({
+            restartRecoveryDeliveryRunId: previousRunId,
+            restartRecoveryDeliverySourceRunId: previousRunId,
+            restartRecoveryDeliveryRequestFingerprint: "previous-request-fingerprint",
+          });
+          await expect(delivery.prepareCurrent()).rejects.toThrow(
+            predecessor === "terminal-pending" ? "terminal-pending" : "stale-claim",
+          );
+        }
+      } finally {
+        delivery.release();
+      }
+      return makeCompactionResult({ sessionId, text: "Child result", runner: "embedded" });
+    });
+    await agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Continue the child's work",
+        allowModelOverride: false,
+        deliver: false,
+        channel: "webchat",
+        requesterOrigin: {
+          sessionKey: "agent:main:dashboard:parent",
+          messageProvider: "webchat",
+          senderId: "synthetic-owner",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:dashboard:parent",
+          sourceChannel: "webchat",
+          sourceTool: "sessions_send",
+        },
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
   },
 );
