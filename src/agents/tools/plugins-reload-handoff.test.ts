@@ -448,8 +448,14 @@ it.for([
             respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["owner-probe"] } });
           }
         });
+        const inspect = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+          respond(true, { id: "owner-probe", status: "loaded" });
+        });
         const context = createContext(
-          [["plugins.reload", "operator.admin", "plugins", endpoint]],
+          [
+            ["plugins.reload", "operator.admin", "plugins", endpoint],
+            ["plugins.inspect", "operator.read", "plugins", inspect],
+          ],
           () => config,
         );
         context.resolveGatewayContext = () => context;
@@ -560,6 +566,24 @@ it.for([
               } else {
                 expect(await read).toMatchObject({
                   content: [{ type: "text", text: "owner record" }],
+                });
+              }
+              const caller = expectDefined(
+                createAdmittedGatewayToolCallerIdentity({ admittedRunContext, ...scope }),
+                "resumed Gateway tool caller",
+              );
+              const inspection = withGatewayToolCallerIdentity(caller, () =>
+                createPluginsTool().execute("resumed-inspect", {
+                  action: "inspect",
+                  pluginId: "owner-probe",
+                }),
+              );
+              if (invalidated) {
+                await expect(inspection).rejects.toThrow();
+              } else {
+                expect((await inspection).details).toMatchObject({
+                  id: "owner-probe",
+                  status: "loaded",
                 });
               }
             }
@@ -681,6 +705,7 @@ it.for([
           );
           expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
           expect(endpoint).toHaveBeenCalledOnce();
+          expect(inspect).toHaveBeenCalledTimes(isOwner && !invalidated ? 1 : 0);
         } finally {
           cleanup.resolve();
           executeRead.resolve();

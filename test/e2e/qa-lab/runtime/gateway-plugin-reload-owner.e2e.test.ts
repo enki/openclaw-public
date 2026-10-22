@@ -97,7 +97,7 @@ function result(body: Body, id: string): string {
   return output;
 }
 it(
-  "executes an owner-private tool after actual plugin replacement without another owner message",
+  "executes owner-private and Gateway tools after actual plugin replacement without another owner message",
   { timeout: 120_000 },
   async ({ signal, onTestFinished }) => {
     const home = tempDirs.make("openclaw-real-reload-owner-");
@@ -250,7 +250,24 @@ it(
                   assert(first);
                   expect(second).toMatchObject({ ...first, generation: expect.any(Number) });
                   expect(second.generation).toBeGreaterThan(first.generation);
-                  reply("Owner-only read succeeded after actual plugin reload.");
+                  writeToolCall(response, "plugins", "resumed-inspect", {
+                    action: "inspect",
+                    pluginId: "owner-probe",
+                  });
+                  break;
+                }
+                case 4: {
+                  const inspection = JSON.parse(result(body, "resumed-inspect")) as {
+                    ok: boolean;
+                    plugin: { id: string; enabled: boolean };
+                  };
+                  expect(inspection).toMatchObject({
+                    ok: true,
+                    plugin: { id: "owner-probe", enabled: true },
+                  });
+                  reply(
+                    "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
+                  );
                   break;
                 }
                 default:
@@ -312,7 +329,7 @@ it(
             if (
               event.event === "chat" &&
               JSON.stringify(event.payload).includes(
-                "Owner-only read succeeded after actual plugin reload.",
+                "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
               ) &&
               (event.payload as { state?: string })?.state === "final"
             ) {
@@ -339,7 +356,7 @@ it(
         assert(first);
         expect(history.sessionId).toBe(first.sessionId);
         expect(JSON.stringify(history.messages)).toContain(
-          "Owner-only read succeeded after actual plugin reload.",
+          "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
         );
       } finally {
         try {
