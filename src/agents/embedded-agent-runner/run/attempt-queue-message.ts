@@ -325,8 +325,9 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   onAccepted?: () => void,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
+  const mayAnswerPendingQuestion = options?.allowPendingUserInputAnswer !== false;
   const isPlainTextAnswer = !hasPromptImageInput(options);
-  if (isInboundUserMessage && !isPlainTextAnswer) {
+  if (isInboundUserMessage && mayAnswerPendingQuestion && !isPlainTextAnswer) {
     try {
       await cancelPendingAgentQuestionForSession({
         sessionKey,
@@ -347,6 +348,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   // unnecessary await here lets callers emit before subscribe() runs.
   if (
     isInboundUserMessage &&
+    mayAnswerPendingQuestion &&
     isPlainTextAnswer &&
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
@@ -403,7 +405,11 @@ export async function claimEmbeddedPendingUserInputAnswer(
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
 ): Promise<boolean> {
-  if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
+  if (
+    options?.isInboundUserMessage !== true ||
+    options.allowPendingUserInputAnswer === false ||
+    hasPromptImageInput(options)
+  ) {
     return false;
   }
   return await claimPendingAgentQuestionAnswer({
