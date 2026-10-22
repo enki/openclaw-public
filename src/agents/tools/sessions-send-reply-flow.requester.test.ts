@@ -116,7 +116,10 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         requesterOrigin: origin,
       });
       participants.accept({ operatorAuthority: bobSource.authority, requesterOrigin: bobOrigin });
-      const expectedOrigin = boundary === "selected Bob" ? bobOrigin : origin;
+      const expectedOrigin =
+        boundary === "selected Bob"
+          ? { ...bobOrigin, delegatedCreatorProfileId: source.authority.profileId }
+          : origin;
       const peerWaiting = createDeferredCore();
       const releasePeer = createDeferredCore();
       const returned = createDeferredCore();
