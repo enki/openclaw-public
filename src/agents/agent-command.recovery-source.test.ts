@@ -14,6 +14,7 @@ import {
   registerAgentCommandCompactionTestHooks,
   requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
+import { readRestartRecoveryRequesterSource } from "./requester-run-recovery-source.js";
 
 // Exercise real command admission, post-run publication and the marker transaction.
 // Shared fixtures isolate model, provider/config/plugin and final transport dependencies.
@@ -111,6 +112,18 @@ it.each(["settled", "unresolved", "terminal-pending"] as const)(
       restartRecoveryDeliverySourceRunId: previousRunId,
       restartRecoveryDeliveryRequestFingerprint: "previous-request-fingerprint",
       restartRecoverySourceIngress: "internal",
+      restartRecoveryRequesterSource: {
+        agentId: "main",
+        sessionKey,
+        sessionId,
+        lifecycleRevision: "same-child-incarnation",
+        sourceRunId: previousRunId,
+        requesterOrigin: {
+          sessionKey: "agent:main:dashboard:previous-parent",
+          messageProvider: "webchat",
+          senderId: "synthetic-previous-owner",
+        },
+      },
       ...(predecessor !== "unresolved" ? { restartRecoveryTerminalRunIds: [previousRunId] } : {}),
       ...(predecessor === "terminal-pending"
         ? { restartRecoveryDeliveryReceiptState: "terminal-pending" as const }
@@ -133,6 +146,17 @@ it.each(["settled", "unresolved", "terminal-pending"] as const)(
             restartRecoveryTerminalRunIds: [previousRunId],
           });
           expect(current?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+          expect(
+            readRestartRecoveryRequesterSource({
+              ...target,
+              entry: current!,
+              sourceRunId: runId,
+            }),
+          ).toMatchObject({
+            sessionKey: "agent:main:dashboard:parent",
+            messageProvider: "webchat",
+            senderId: "synthetic-owner",
+          });
           await expect(delivery.prepareCurrent()).resolves.toBeUndefined();
           expect(() => delivery.assertCurrent()).not.toThrow();
         } else {
@@ -142,6 +166,10 @@ it.each(["settled", "unresolved", "terminal-pending"] as const)(
             restartRecoveryDeliveryRunId: previousRunId,
             restartRecoveryDeliverySourceRunId: previousRunId,
             restartRecoveryDeliveryRequestFingerprint: "previous-request-fingerprint",
+            restartRecoveryRequesterSource: {
+              sourceRunId: previousRunId,
+              requesterOrigin: { senderId: "synthetic-previous-owner" },
+            },
           });
           await expect(delivery.prepareCurrent()).rejects.toThrow(
             predecessor === "terminal-pending" ? "terminal-pending" : "stale-claim",
