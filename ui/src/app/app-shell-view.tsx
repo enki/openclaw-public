@@ -225,6 +225,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         <Show when={!view().nativeEmbed}>
           <button
             type="button"
+            ref={(element) => (props.host.navBackdropElement = element)}
             class="shell-nav-backdrop"
             tabindex={-1}
             aria-hidden="true"
@@ -286,7 +287,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
-            title={t("nav.resize")}
             onResize-start={() => setNavResizing(true)}
             onResize-end={() => setNavResizing(false)}
             onResize={(event: CustomEvent<{ splitRatio: number }>) =>
