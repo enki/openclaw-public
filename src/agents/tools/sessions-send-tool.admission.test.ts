@@ -5,11 +5,14 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
 } from "../../gateway/device-revocation.js";
 import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
@@ -314,12 +317,16 @@ describe("sessions_send dispatch admission", () => {
     },
   );
 
-  it.each(["adapter", "run"] as const)(
-    "retains post-consumption steering custody until %s settles",
+  it.each(["adapter", "run", "device revocation", "session replacement"] as const)(
+    "retains post-consumption steering custody through %s",
     async (settleVia) => {
       const { context, owner, source } = operatorFixture("steer");
       const accepted = createDeferredCore();
+      const consumed = createDeferredCore();
+      const resumePersistence = createDeferredCore();
       const receipt = createDeferredCore();
+      let persistenceAttempted = false;
+      let persistenceError: unknown;
       const sessionFile = "/synthetic/steering-custody/session.jsonl";
       let continuationSignal: AbortSignal | undefined;
       const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
@@ -340,7 +347,19 @@ describe("sessions_send dispatch admission", () => {
           options?.onQueueAccepted?.(true);
           // Codex settles consumption before its adapter persists accepted peer guidance.
           await Promise.resolve().then(() => options?.onQueueSettled?.());
-          await options!.userTurnTranscriptRecorder!.persistApproved();
+          consumed.resolve();
+          await resumePersistence.promise;
+          persistenceAttempted = true;
+          try {
+            const recorder = options!.userTurnTranscriptRecorder!;
+            await recorder.persistApproved();
+            if (!recorder.hasPersisted()) {
+              throw new Error("Accepted Codex steering could not be persisted");
+            }
+          } catch (error) {
+            persistenceError = error;
+            throw error;
+          }
           accepted.resolve();
           await receipt.promise;
           queueReturned = true;
@@ -448,7 +467,51 @@ describe("sessions_send dispatch admission", () => {
         );
       })();
       try {
-        await assertPendingAtGate(accepted.promise, pending, "Native acceptance");
+        await assertPendingAtGate(consumed.promise, pending, "Native consumption");
+        expect(continuationSignal?.aborted).toBe(false);
+        expect(persistenceAttempted).toBe(false);
+        if (settleVia === "device revocation" || settleVia === "session replacement") {
+          if (settleVia === "device revocation") {
+            invalidateGatewayDeviceRevocation(context, "steer-device", "operator");
+            expect(source.isCurrent()).toBe(false);
+          } else {
+            await putSession(targetSessionKey, {
+              sessionId: "replacement-session",
+              updatedAt: Date.now(),
+            });
+          }
+          resumePersistence.resolve();
+          expect((await pending).details).toMatchObject({
+            status: "error",
+            error: expect.stringMatching(
+              settleVia === "device revocation"
+                ? /authority|revok|active/i
+                : /persist|session|incarnation/i,
+            ),
+          });
+          expect(persistenceAttempted).toBe(true);
+          expect(persistenceError).toBeInstanceOf(Error);
+          for (const sessionId of [
+            "target-session",
+            ...(settleVia === "session replacement" ? ["replacement-session"] : []),
+          ]) {
+            const messages = (
+              await loadTranscriptEvents({
+                agentId: "main",
+                storePath,
+                sessionId,
+              })
+            )
+              .map(readTranscriptEventMessage)
+              .filter((message) => message?.idempotencyKey === `${runId}:user`);
+            expect(messages).toHaveLength(0);
+          }
+          expect(queueReturned).toBe(false);
+          await vi.waitFor(() => expect(continuationSignal?.aborted).toBe(true));
+          return;
+        }
+        resumePersistence.resolve();
+        await assertPendingAtGate(accepted.promise, pending, "Native persistence");
         expect(continuationSignal?.aborted).toBe(false);
         vi.useFakeTimers();
         detachActiveEmbeddedRun("target-session", sibling, targetSessionKey);
@@ -470,6 +533,7 @@ describe("sessions_send dispatch admission", () => {
         }
       } finally {
         vi.useRealTimers();
+        resumePersistence.resolve();
         receipt.resolve();
         try {
           await Promise.all([pending, native]);

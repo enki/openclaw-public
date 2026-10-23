@@ -121,7 +121,10 @@ async function createFixture() {
     registration.registry.agentHarnesses[0]?.harness,
     "registrar-owned bundled Codex harness",
   );
-  const harness = createStartedThreadHarness();
+  const harness = createStartedThreadHarness(
+    async (method) => (method === "turn/steer" ? { turnId: "turn-1" } : undefined),
+    { persistedThreads: [] },
+  );
   const run = runCodexAppServerAttempt(params, { registeredHarness });
   const accepted = vi.fn();
   let lock: ReturnType<typeof holdTranscript> | undefined;
@@ -393,6 +396,84 @@ it("persists a controller-adapted human steer before native dispatch", async () 
     expect(
       (await f.readMessages()).filter((message) => messageText(message) === steerText),
     ).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
+});
+
+it("records native consumption before accepted internal guidance is durably persisted", async () => {
+  const release = createDeferred<void>();
+  const consumed = vi.fn();
+  const order: string[] = [];
+  const persist = expectDefined(
+    f.recorder.persistApproved.getMockImplementation(),
+    "recorder persistence",
+  );
+  f.recorder.persistApproved.mockImplementation(async () => {
+    expect(consumed).toHaveBeenCalledOnce();
+    order.push("persistence-start");
+    await release.promise;
+    const result = await persist();
+    order.push("persistence-committed");
+    return result;
+  });
+  try {
+    expect(
+      f.queue({
+        isInboundUserMessage: false,
+        onQueueSettled: () => {
+          order.push("native-consumed");
+          consumed();
+        },
+      }),
+    ).toBe(true);
+    await vi.waitFor(() => expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+    expect(f.recorder.persistApproved).not.toHaveBeenCalled();
+    const steer = expectDefined(
+      f.harness.requests.find((request) => request.method === "turn/steer"),
+      "native steer",
+    );
+    const clientId = expectDefined(
+      isJsonObject(steer.params) && typeof steer.params.clientUserMessageId === "string"
+        ? steer.params.clientUserMessageId
+        : undefined,
+      "native steer correlation",
+    );
+    const userItem = {
+      id: "synthetic-internal-guidance",
+      type: "userMessage",
+      clientId,
+      content: [{ type: "text", text: steerText, text_elements: [] }],
+    };
+    const notification = f.item(userItem);
+    await vi.waitFor(() => expect(f.recorder.persistApproved).toHaveBeenCalledOnce(), fastWait);
+    expect(order).toEqual(["native-consumed", "persistence-start"]);
+    expect(f.recorder.hasPersisted()).toBe(false);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    expect(
+      f.harness.requests.filter((request) => request.method === "turn/interrupt"),
+    ).toHaveLength(0);
+    release.resolve();
+    await notification;
+    await vi.waitFor(() => expect(f.recorder.hasPersisted()).toBe(true), fastWait);
+    expect(order).toEqual(["native-consumed", "persistence-start", "persistence-committed"]);
+    expect(
+      (await f.readMessages()).filter((message) => messageText(message) === steerText),
+    ).toHaveLength(1);
+    const finalItem = {
+      id: "synthetic-internal-final",
+      type: "agentMessage",
+      phase: "final_answer",
+      text: codaText,
+    };
+    await f.item(finalItem);
+    await f.complete([prefix, userItem, finalItem]);
+    expect(readAttemptTerminal(await f.run)).toMatchObject(successfulTerminal);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    expect(
+      f.harness.requests.filter((request) => request.method === "turn/interrupt"),
+    ).toHaveLength(0);
+    expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
   }
