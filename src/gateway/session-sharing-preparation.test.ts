@@ -290,8 +290,15 @@ it("keeps durable sharing facts current before observers without SQL in retained
         expect(harness.authorize(read.readCurrent(cfg)) === null).toBe(allowed),
       );
     assertWithoutSql(true);
-    sessionChanges.emit({ all: true, scope: "subagent-runs" });
-    assertWithoutSql(true);
+    for (const change of [
+      { all: true, scope: "subagent-runs" },
+      { all: true, scope: "runtime" },
+      { all: true, scope: "automation" },
+      { sessionKey, agentId: "main", storePath: databasePath, scope: "runtime" },
+    ] as const) {
+      sessionChanges.emit(change);
+      assertWithoutSql(true);
+    }
     harness.write({
       ...entry,
       archivedAt: 2,

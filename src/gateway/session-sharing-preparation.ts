@@ -28,6 +28,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   isSessionStoreTopologyChange,
+  sessionChangeScopeAffectsStoredRows,
   sessionChanges,
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
@@ -144,6 +145,9 @@ export async function prepareSessionMutationFacts(
     invalidated = true;
   };
   const changed = (change: SessionRowChange) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
         if (beforeDiscovery) {
@@ -161,23 +165,6 @@ export async function prepareSessionMutationFacts(
         return;
       }
       if (
-        typeof change.scope === "string" &&
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-          "config-presentation",
-          "config-profiles",
-        ].includes(change.scope)
-      ) {
-        return;
-      }
-      if (
         typeof change.scope === "object" &&
         change.scope.agentId &&
         change.scope.agentId !== agentId
@@ -188,8 +175,6 @@ export async function prepareSessionMutationFacts(
       return;
     }
     if (
-      change.scope === "automation" ||
-      change.scope === "acp" ||
       (change.agentId && change.agentId !== agentId && !change.storePath) ||
       ![...initialStoreKeys, ...(facts?.target?.storeKeys ?? [])].includes(change.sessionKey)
     ) {

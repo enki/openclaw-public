@@ -48,7 +48,7 @@ export async function queueSessionsSendSteeringWithCustody(
             },
             onQueueSettled: () => settlement.resolve(),
           });
-          const queueReturned = queued.then(
+          void queued.then(
             (outcome) => {
               admission.resolve(outcome);
               if (outcome.status === "rejected" && !accepted) {
@@ -62,13 +62,10 @@ export async function queueSessionsSendSteeringWithCustody(
               }
             },
           );
-          // Native consumption can precede the adapter's transcript commit;
-          // retain authorization until both have finished. Receiver teardown
-          // still releases custody if the backend never returns its receipt.
-          const inputSettled = Promise.all([settlement.promise, queueReturned]);
+          // Receiver teardown can precede a backend's queue receipt.
           await (attemptSettlement
-            ? Promise.race([inputSettled, attemptSettlement])
-            : inputSettled);
+            ? Promise.race([settlement.promise, attemptSettlement])
+            : settlement.promise);
         }),
       );
     } catch (error) {
