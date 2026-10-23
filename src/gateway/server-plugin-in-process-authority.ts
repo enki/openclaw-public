@@ -210,11 +210,7 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
         if (captured) {
-          if (
-            (resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== resolved.context
-          ) {
-            throw new Error("Gateway continuation instance binding is no longer active");
-          }
+          resolved.assertGatewayCurrent();
         } else {
           resolved.assertSourceCurrent();
         }

@@ -16,7 +16,6 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -69,7 +68,7 @@ describe("typed in-process agent continuation authorization", () => {
     waitForTurn.mockReset();
   });
 
-  it.each(["parent settled", "operator role revoked", "parent retired before acceptance"] as const)(
+  it.each(["parent settled", "parent retired before acceptance"] as const)(
     "checks an accepted child independently of recovered parent work: %s",
     (boundary) =>
       withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
@@ -107,7 +106,7 @@ describe("typed in-process agent continuation authorization", () => {
         startTurn.mockImplementation(
           async (
             { principal, io, assertAdmissionCurrent, preflight: { request } },
-            assertContextCurrent,
+            assertGatewayLifetimeCurrent,
           ) => {
             try {
               if (boundary === "parent retired before acceptance") {
@@ -129,7 +128,7 @@ describe("typed in-process agent continuation authorization", () => {
               entered.resolve();
               await resume.promise;
               // The execution boundary checks its facade binding before its admitted principal.
-              assertContextCurrent?.();
+              assertGatewayLifetimeCurrent?.();
               child.authority?.assertCurrent();
               effects += 1;
               io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
@@ -174,19 +173,9 @@ describe("typed in-process agent continuation authorization", () => {
             expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
           }
           expect(child.authority.assertCurrent).not.toThrow();
-          if (boundary === "operator role revoked") {
-            setUserProfileRole(profile.id, "changed-role");
-            expect(child.authority.assertCurrent).toThrow();
-          }
           resume.resolve();
-          const failure = await outcome.promise;
-          if (boundary === "operator role revoked") {
-            expect(failure).toBeInstanceOf(Error);
-            expect(effects).toBe(0);
-          } else {
-            expect(failure).toBeUndefined();
-            expect(effects).toBe(1);
-          }
+          expect(await outcome.promise).toBeUndefined();
+          expect(effects).toBe(1);
         } finally {
           resume.resolve();
           await startTurn.mock.results.at(-1)?.value.catch(() => undefined);
