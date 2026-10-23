@@ -130,7 +130,7 @@ async function plan(
       forceDirectMessageTool: false,
       requireExplicitMessageTarget: false,
       inheritedToolAllowlist: [],
-      inheritedPublicationToolRef: {},
+      additionalInheritedToolNamesRef: [],
       localModelLeanEnabled: false,
       localModelLeanPreserveToolNames: [],
       replaySafetyOptions: { declaredReplaySafe: () => undefined },

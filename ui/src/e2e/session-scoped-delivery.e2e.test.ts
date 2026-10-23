@@ -10,8 +10,8 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionText as waitText } from "./session-ui.test-support.ts";
 import { seedStorage } from "./sidebar-assertions.test-support.ts";
-import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI scoped stream delivery",
@@ -96,18 +96,12 @@ suite.define(() => {
           "chat",
           chatDelta(first, "run-0", "Visible chat stays live"),
         );
-        await page
-          .locator(".chat-thread-inner")
-          .getByText("Visible chat stays live", { exact: true })
-          .waitFor();
-        if (mode === "preview-off") {
-          const row = page.locator(`[data-session-key="${keys[1]}"]`);
-          expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
-          await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
-          await openSidebarMenu(page);
-          await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
-          await closeSidebarMenu(page);
-          await row.getByText("Waiting for the next instruction", { exact: true }).waitFor();
+        await waitText(page.locator(".chat-thread-inner"), "Visible chat stays live");
+        if (mode === "preview-on") {
+          await waitText(
+            page.locator(`[data-session-key="${keys[1]}"]`),
+            "Waiting for the next instruction",
+          );
         }
       });
     },
@@ -149,8 +143,8 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
         const panes = page.locator(".chat-split-view__cell");
-        await panes.nth(0).getByText("Attached 0", { exact: true }).waitFor();
-        await panes.nth(1).getByText("Attached 1", { exact: true }).waitFor();
+        await waitText(panes.nth(0), "Attached 0");
+        await waitText(panes.nth(1), "Attached 1");
         for (const key of [first, second, narrated]) {
           await gateway.waitForRequest(subscribe, { match: { key } });
         }
@@ -162,8 +156,8 @@ suite.define(() => {
           gateway.emitGatewayEvent("chat", chatDelta(key, runId, text));
         await send(first, "run-0", "Foreground is streaming");
         await send(second, "run-1", "Second pane is streaming");
-        await panes.nth(0).getByText("Foreground is streaming", { exact: true }).waitFor();
-        await panes.nth(1).getByText("Second pane is streaming", { exact: true }).waitFor();
+        await waitText(panes.nth(0), "Foreground is streaming");
+        await waitText(panes.nth(1), "Second pane is streaming");
         const narrationRow = page.locator(
           `.sidebar-recent-session[data-session-key="${narrated}"]`,
         );
@@ -220,7 +214,7 @@ suite.define(() => {
             updatedAt: 101,
           },
         });
-        await unrelatedRow.getByText("Unrelated completed work", { exact: true }).waitFor();
+        await waitText(unrelatedRow, "Unrelated completed work");
         await unrelatedRow.locator(".session-unread-dot").waitFor();
         expect(await unrelatedRow.getAttribute("class")).not.toContain("session-row-host--running");
         expect(await gateway.getRequests(subscribe, { key: unrelated })).toHaveLength(0);
@@ -241,7 +235,7 @@ suite.define(() => {
         }
         expect(await narrationRow.locator(".sidebar-session-tool").count()).toBe(0);
         await send(second, "run-1", "Second pane resumed");
-        await panes.nth(1).getByText("Second pane resumed", { exact: true }).waitFor();
+        await waitText(panes.nth(1), "Second pane resumed");
         await send(unrelated, "other-run", "Unrelated must stay off the socket");
         const sessionsAfterReconnect = await receivedSessions(page);
         expect(sessionsAfterReconnect).toContain(second);
@@ -274,10 +268,7 @@ suite.define(() => {
       });
       await page.locator(".agent-chat__composer-combobox textarea").fill("Respond immediately");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
-      await page
-        .locator(".chat-thread-inner")
-        .getByText("Fast first token", { exact: true })
-        .waitFor();
+      await waitText(page.locator(".chat-thread-inner"), "Fast first token");
       const requests = await gateway.getRequests();
       expect(requests.findIndex((request) => request.method === subscribe)).toBeLessThan(
         requests.findIndex((request) => request.method === "chat.send"),

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,6 +15,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
+import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import {
   companionRuntimeConfig,
   observeCompanionCleanup,
@@ -120,7 +122,7 @@ function createHarness(overrides?: {
 }
 
 function expectEmpty(service: Companion) {
-  expect(service.state(target)).toEqual({ exchanges: [] });
+  expect(service.state(target).exchanges).toEqual([]);
 }
 function savedExchange(question: string, response = answer) {
   return { question, answer: response, ts: 100 };
@@ -278,7 +280,7 @@ it.each(["execution", "reply"] as const)(
       release.resolve();
       await expect(pending).resolves.toMatchObject({ reason: "session-missing" });
       expect(harness.run).toHaveBeenCalledTimes(phase === "execution" ? 0 : 1);
-      expect(harness.service.state(askRequest("What changed?"))).toEqual({ exchanges: [] });
+      expect(harness.service.state(askRequest("What changed?")).exchanges).toEqual([]);
     } finally {
       release.resolve();
       await pending;
@@ -387,7 +389,7 @@ it.each(["global", "agent:work:selected"])(
       previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
     });
 
-    expect(harness.service.state(selected)).toEqual({ exchanges: [] });
+    expect(harness.service.state(selected).exchanges).toEqual([]);
     expect(harness.service.state(other).exchanges).toEqual([
       expect.objectContaining({ question: "Main?" }),
     ]);
@@ -480,7 +482,10 @@ it("times out a pending context read and fences it from a replacement ask", asyn
   });
   try {
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(failure).toMatchObject({ reason: "unavailable", message: "Side chat timed out." });
+    expect(failure).toMatchObject({
+      reason: "timeout",
+      message: "Side chat timed out. Try again.",
+    });
     vi.useRealTimers();
     await expect(
       harness.service.ask({ ...request, question: "Replacement?" }),
@@ -495,6 +500,65 @@ it("times out a pending context read and fences it from a replacement ask", asyn
   } finally {
     pendingContext.resolve(context);
     await active;
+  }
+});
+
+it("keeps the RPC source and busy slot through timed-out execution cleanup, then permits retry", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const harness = createHarness();
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  harness.run.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+    return { meta: { durationMs: 1, finalAssistantVisibleText: "Late answer" } };
+  });
+  const respond = vi.fn();
+  const pending = Promise.resolve(
+    sessionCompanionHandlers["sessions.companion.ask"]!({
+      params: { ...target, question: "Will this time out?" },
+      client: { connId: "conn-1" },
+      context: { sessionCompanion: harness.service, getRuntimeConfig: () => cfg },
+      respond,
+    } as never),
+  );
+  try {
+    await awaitGateBeforeSettlement(started.promise, pending, "RPC settled before model start");
+    const run = harness.run.mock.calls[0]![1].runParams;
+    const { agentId, sessionId, sessionKey, storePath } = run.sessionTarget ?? {};
+    if (!agentId || !sessionId || !sessionKey || !storePath || !run.preparedRunAdmission) {
+      throw new Error("Expected the real admitted internal run");
+    }
+    const internalTarget = { agentId, sessionId, sessionKey, storePath };
+    expect(loadExactSessionEntry(internalTarget)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run.abortSignal?.aborted).toBe(true);
+    // A deadline cancels execution, but must not retire its source facts before settlement.
+    expect(() => run.preparedRunAdmission?.assertSourceCurrent()).not.toThrow();
+    expect(respond).not.toHaveBeenCalled();
+    await expect(harness.service.ask(askRequest("Too early?"))).rejects.toMatchObject({
+      reason: "busy",
+    });
+    finish.resolve();
+    await pending;
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Side chat timed out. Try again.",
+        details: { reason: "timeout" },
+        retryable: true,
+      }),
+    );
+    expect(loadExactSessionEntry(internalTarget)).toBeUndefined();
+    expectEmpty(harness.service);
+    vi.useRealTimers();
+    await expect(harness.service.ask(askRequest("Retry?"))).resolves.toMatchObject({ answer });
+    expect(harness.service.state(target).exchanges).toEqual([savedExchange("Retry?")]);
+  } finally {
+    finish.resolve();
+    await pending;
   }
 });
 
@@ -544,9 +608,9 @@ it("cancels a disconnected request before a late model result can commit", async
   await expect(active).rejects.toMatchObject({
     reason: "unavailable",
   });
-  expect(harness.service.state(target)).toEqual({
-    exchanges: [savedExchange("What is already known?", "existing answer")],
-  });
+  expect(harness.service.state(target).exchanges).toEqual([
+    savedExchange("What is already known?", "existing answer"),
+  ]);
 });
 
 it("keeps provider failures terminal after one model call", async () => {
@@ -560,9 +624,9 @@ it("keeps provider failures terminal after one model call", async () => {
     reason: "unavailable",
   } satisfies Partial<SessionCompanionAskError>);
   expect(harness.run).toHaveBeenCalledOnce();
-  expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
-    exchanges: [],
-  });
+  expect(
+    harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+  ).toEqual([]);
   harness.service.dispose();
 });
 
@@ -575,8 +639,8 @@ it("clears a thread when the committed gateway reset path notifies", async () =>
 
   notifyGatewaySessionReset("agent:main:main", "main");
 
-  expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
-    exchanges: [],
-  });
+  expect(
+    harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+  ).toEqual([]);
   harness.service.dispose();
 });
