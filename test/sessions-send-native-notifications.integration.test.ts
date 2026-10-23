@@ -1,48 +1,48 @@
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import { loadCodexNativeWebSearchTestFixture } from "../../../extensions/codex/test-api.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import type { CodexAttemptRuntime } from "../../../test/types/vitest-codex-attempt-runtime.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadCodexNativeWebSearchTestFixture } from "../extensions/codex/test-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../src/agents/agent-bundle-mcp-manager-api.js";
+import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
+import type { AgentToolGatewayRequestCaller } from "../src/agents/tools/in-process-gateway.js";
+import { createSessionsSendTool } from "../src/agents/tools/sessions-send-tool.js";
+import { setRuntimeConfigSnapshot } from "../src/config/config.js";
+import { resolveSessionStorePathCore } from "../src/config/sessions/paths.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
+} from "../src/config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../src/config/sessions/session-accessor.sqlite-read.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
-} from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+} from "../src/gateway/device-revocation.js";
+import { captureGatewayOperatorRunAuthority } from "../src/gateway/operator-run-authority.js";
+import { withOperatorToolGatewayAuthority } from "../src/gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
-} from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
-import * as harnessRuntime from "../../plugin-sdk/agent-harness-runtime.js";
+} from "../src/gateway/server-plugin-in-process-dispatch.test-support.js";
+import { getTrackedWorkerPoolSnapshot } from "../src/infra/worker-cpu.js";
+import * as harnessRuntime from "../src/plugin-sdk/agent-harness-runtime.js";
 import {
   createPluginRecord,
   createPluginRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
-} from "../../plugin-sdk/plugin-test-runtime.js";
+} from "../src/plugin-sdk/plugin-test-runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  disposeAllSessionMcpRuntimes,
-  setSessionMcpRuntimeScheduler,
-} from "../agent-bundle-mcp-manager-api.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
-import { createSessionsSendTool } from "./sessions-send-tool.js";
+} from "../src/plugins/runtime/gateway-request-scope.js";
+import { sessionChanges } from "../src/sessions/session-row-changes.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
+import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { awaitGateBeforeSettlement } from "./helpers/promise.js";
+import type { CodexAttemptRuntime } from "./types/vitest-codex-attempt-runtime.js";
 
 const fixture = await loadCodexNativeWebSearchTestFixture();
 beforeEach((context) => {

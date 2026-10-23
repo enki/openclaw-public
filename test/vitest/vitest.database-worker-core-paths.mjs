@@ -1,6 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "src/agents/tools/sessions-send-tool.native-notifications.test.ts",
+  "test/sessions-send-native-notifications.integration.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
