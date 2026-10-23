@@ -20,11 +20,6 @@ const RECLAIM_BACKOFF: BackoffPolicy = {
   jitter: 0.2,
 };
 
-type ManagedTailscaleRoute = {
-  claim: Awaited<ReturnType<typeof claimTailscaleRoute>>;
-  clearPublishedOrigin?: () => void;
-};
-
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   port: number;
@@ -63,8 +58,8 @@ export async function startGatewayTailscaleExposure(params: {
     }
   }
 
-  const claimRoute = async (signal?: AbortSignal): Promise<ManagedTailscaleRoute> => {
-    let claim: ManagedTailscaleRoute["claim"] | undefined;
+  const claimRoute = async (signal?: AbortSignal) => {
+    let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
     let clearPublishedOrigin: (() => void) | undefined;
     try {
       claim = await claimTailscaleRoute(
@@ -87,26 +82,24 @@ export async function startGatewayTailscaleExposure(params: {
       if (!claim.isActive()) {
         throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
       }
-      if (host) {
-        const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-        const publicHost = resolveTailscalePublishedHost({
+      const publicHost =
+        host &&
+        resolveTailscalePublishedHost({
           tailscaleMode: effectiveMode,
           tailnetHost: host,
         });
-        if (publicHost) {
-          clearPublishedOrigin = prepareTailscalePublishedOrigin({
-            origin: `https://${publicHost}`,
-            mode: effectiveMode,
-          });
-          params.logTailscale.info(
-            `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
-          );
-        } else {
-          params.logTailscale.info(`${params.tailscaleMode} enabled`);
-        }
-      } else {
-        params.logTailscale.info(`${params.tailscaleMode} enabled`);
+      if (publicHost) {
+        clearPublishedOrigin = prepareTailscalePublishedOrigin({
+          origin: `https://${publicHost}`,
+          mode: effectiveMode,
+        });
       }
+      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
+      params.logTailscale.info(
+        publicHost
+          ? `${effectiveMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`
+          : `${effectiveMode} enabled`,
+      );
       return { claim, clearPublishedOrigin };
     } catch (err) {
       clearPublishedOrigin?.();
@@ -124,7 +117,7 @@ export async function startGatewayTailscaleExposure(params: {
     }
   };
 
-  let route: ManagedTailscaleRoute;
+  let route: Awaited<ReturnType<typeof claimRoute>>;
   try {
     route = await claimRoute(params.signal);
   } catch (err) {
@@ -138,66 +131,52 @@ export async function startGatewayTailscaleExposure(params: {
     throw err;
   }
 
+  // Startup retires after handoff; the returned cleanup owns resident recovery.
   const recoveryAbort = new AbortController();
-  // Startup retires after the close handle is published; cleanup owns the live route.
   const recoverySignal = recoveryAbort.signal;
-  let reclaiming: Promise<void> | undefined;
   let recoveryFailure: AggregateError | undefined;
-  const recoverRoute = async () => {
-    for (let attempt = 1; !recoverySignal.aborted; attempt += 1) {
-      try {
-        await sleepWithAbort(computeBackoff(RECLAIM_BACKOFF, attempt), recoverySignal, {
-          ref: false,
-        });
-        route = await claimRoute(recoverySignal);
-        watchRoute(route);
-        return;
-      } catch (error) {
-        if (error instanceof AggregateError) {
-          // Unconfirmed claim cleanup must remain visible to the shutdown owner.
-          recoveryFailure = error;
-          params.logTailscale.warn(
-            `${effectiveMode} recovery stopped because claim cleanup failed: ${formatErrorMessage(error)}`,
-          );
-          return;
-        }
-        if (recoverySignal.aborted) {
-          return;
-        }
-        if (isTailscaleRouteOwnershipConflictError(error)) {
-          params.logTailscale.warn(
-            `${effectiveMode} recovery stopped because the HTTPS port is owned elsewhere: ${formatErrorMessage(error)}`,
-          );
-          return;
-        }
-        params.logTailscale.warn(
-          `${effectiveMode} recovery failed; retrying: ${formatErrorMessage(error)}`,
-        );
-      }
-    }
-  };
-  const watchRoute = (watched: ManagedTailscaleRoute) => {
-    void watched.claim.exited.then(() => {
-      watched.clearPublishedOrigin?.();
-      if (recoverySignal.aborted) {
-        return;
-      }
+  const recovery = (async () => {
+    while (!recoverySignal.aborted) {
+      await racePromiseWithAbortSignal(route.claim.exited, recoverySignal);
+      recoverySignal.throwIfAborted();
+      route.clearPublishedOrigin?.();
       params.logTailscale.warn(
         `${effectiveMode} route claim exited; recovering managed Tailscale ingress`,
       );
-      const pending = recoverRoute().finally(() => {
-        if (reclaiming === pending) {
-          reclaiming = undefined;
+      for (let attempt = 1; ; attempt += 1) {
+        await sleepWithAbort(computeBackoff(RECLAIM_BACKOFF, attempt), recoverySignal, {
+          ref: false,
+        });
+        try {
+          route = await claimRoute(recoverySignal);
+          break;
+        } catch (error) {
+          if (
+            recoverySignal.aborted ||
+            error instanceof AggregateError ||
+            isTailscaleRouteOwnershipConflictError(error)
+          ) {
+            throw error;
+          }
+          params.logTailscale.warn(
+            `${effectiveMode} recovery failed; retrying: ${formatErrorMessage(error)}`,
+          );
         }
-      });
-      reclaiming = pending;
-    });
-  };
-  watchRoute(route);
+      }
+    }
+  })().catch((error: unknown) => {
+    if (error instanceof AggregateError) {
+      // Unconfirmed cleanup must remain visible to the shutdown owner.
+      recoveryFailure = error;
+    }
+    if (!recoverySignal.aborted || recoveryFailure) {
+      params.logTailscale.warn(`${effectiveMode} recovery stopped: ${formatErrorMessage(error)}`);
+    }
+  });
   return async () => {
-    route.clearPublishedOrigin?.();
     recoveryAbort.abort();
-    await reclaiming;
+    route.clearPublishedOrigin?.();
+    await recovery;
     route.clearPublishedOrigin?.();
     await route.claim.stop();
     if (recoveryFailure) {
