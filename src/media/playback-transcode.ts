@@ -8,7 +8,6 @@ import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
@@ -100,7 +99,7 @@ const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
 const MAX_PENDING_PLAYBACK_INSPECTIONS = 32;
-const playbackJobs = new Map<string, Promise<void>>();
+const playbackJobs = new Set<string>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
@@ -119,13 +118,6 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
       source.exactIdentity.ino.toString(),
     ]),
   );
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
-    createPlaybackTranscodeCacheKey,
-    getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
-  };
 }
 
 function playbackSourceIdentityMatches(
@@ -440,7 +432,7 @@ export async function resolvePlaybackTranscode(
         const inputName = makePlaybackInputFileName(source.path, transcodeMimeType);
         const stagingName = `.${inputName}.stage`;
         // Keep private-store admission without its full-payload buffering path.
-        await workspace.write(stagingName, "");
+        await workspace.store.write(stagingName, "", { durable: false });
         const inputRoot = await workspace.store.root();
         let inputPath: string;
         {
@@ -463,11 +455,6 @@ export async function resolvePlaybackTranscode(
           ) {
             throw new Error("Playback source changed during transcode read");
           }
-          await staged.handle.sync().catch((error: unknown) => {
-            if (!hasErrnoCode(error, "EPERM")) {
-              throw error;
-            }
-          });
           // Keep the writer live so replacement cannot reuse its inode before verification.
           await inputRoot.move(stagingName, inputName);
           await using input = await inputRoot.open(inputName);
@@ -583,8 +570,7 @@ export async function resolvePlaybackTranscode(
       tempPrefix: `.${cacheKey}`,
     });
   })();
-  // Pool admission and test synchronization must observe the same completion boundary.
-  playbackJobs.set(operationKey, job);
+  playbackJobs.add(operationKey);
   void job.then(
     () => {
       playbackJobs.delete(operationKey);

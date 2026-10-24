@@ -6,6 +6,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
+  extendResponsesMessageText,
+  renderResponsesMessageText,
+  responsesTextSignature,
+} from "../providers/openai-responses-message-text.js";
+import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   isAzureResponsesTextDeltaEvent,
@@ -310,36 +315,7 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
-      outputs.observeEvent(event);
-      // Physical activity keeps the connection alive; only advancing model
-      // output resets the separate progress deadline, including hidden deltas.
-      const hasDeltaProgress =
-        event.type.endsWith(".delta") &&
-        "delta" in event &&
-        typeof event.delta === "string" &&
-        event.delta.length > 0;
-      let hasOutputProgress = false;
-      if (
-        (event.type === "response.output_item.added" ||
-          event.type === "response.output_item.done") &&
-        (event.item.type === "reasoning" ||
-          event.item.type === "message" ||
-          event.item.type === "function_call")
-      ) {
-        const previous = outputs.peek(event.item, readResponsesOutputIndex(event));
-        hasOutputProgress =
-          event.type === "response.output_item.added"
-            ? previous === undefined && !outputSlots.resolveOutputItem(event, event.item)
-            : previous?.completed !== true;
-      }
-      notifyLlmRequestActivity(
-        options?.signal,
-        hasDeltaProgress ||
-          hasOutputProgress ||
-          event.type === "response.completed" ||
-          event.type === "response.incomplete" ||
-          event.type === "response.failed",
-      );
+      notifyLlmRequestActivity(options?.signal, outputs.observeEvent(event, outputSlots));
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
@@ -437,6 +413,13 @@ export async function processResponsesStream<TApi extends Api>(
           event.part.type === "refusal"
         ) {
           slot.item.content.push(event.part);
+        }
+      } else if (event.type === "response.output_text.annotation.added") {
+        const slot = outputSlots.resolve(event, "text");
+        const part = slot?.item.content?.[event.content_index];
+        if (part?.type === "output_text" && event.annotation !== null) {
+          part.annotations ??= [];
+          part.annotations.push(event.annotation);
         }
       } else if (
         event.type === "response.output_text.delta" ||
@@ -562,21 +545,19 @@ export async function processResponsesStream<TApi extends Api>(
         ) {
           // Support both OpenAI "output_text" and Azure "text" content types
           const streamedText = outputSlot.pendingText ?? outputSlot.block?.text ?? "";
-          const finalText =
-            item.content == null
-              ? streamedText
-              : item.content
-                  .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
-                  .join("");
+          const rendered = renderResponsesMessageText(
+            item.content ?? outputSlot.item.content ?? [{ type: "text", text: streamedText }],
+          );
+          const finalText = rendered.text;
           const phase = item.phase ?? undefined;
           const collapse =
             outputSlot.pendingText !== null
               ? resolveResponsesMessageSnapshotCollapse({
                   prior: outputSlot.collapseCandidate && {
-                    text: outputSlot.collapseCandidate.block.text,
+                    text: outputSlot.collapseCandidate.rendered.prose,
                     phase: outputSlot.collapseCandidate.phase,
                   },
-                  nextText: finalText,
+                  nextText: rendered.prose,
                   nextPhase: phase,
                 })
               : ({ kind: "keep" } as const);
@@ -586,23 +567,31 @@ export async function processResponsesStream<TApi extends Api>(
             // instead of appending another copy. The deferred block was never
             // started publicly, and the newest item's signature is kept so
             // replay carries the item that produced this content (#91959).
-            outputSlot.collapseCandidate.block.text = collapse.text;
-            outputSlot.collapseCandidate.block.textSignature = encodeTextSignatureV1(
+            const extended = extendResponsesMessageText(
+              rendered,
+              outputSlot.collapseCandidate.rendered,
+            );
+            outputSlot.collapseCandidate.rendered = extended;
+            outputSlot.collapseCandidate.block.text = extended.text;
+            outputSlot.collapseCandidate.block.textSignature = responsesTextSignature(
               item.id,
               phase,
+              extended,
             );
             stream.push({
               type: "text_end",
               contentIndex: outputSlot.collapseCandidate.index,
-              content: collapse.text,
+              content: extended.text,
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
+            terminal.recordCompletedText(outputSlot.collapseCandidate.index, extended);
             outputs.set(
               item,
               outputSlot.collapseCandidate.index,
               readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
               true,
+              rendered.prose,
             );
           } else {
             if (!outputSlot.block) {
@@ -618,17 +607,19 @@ export async function processResponsesStream<TApi extends Api>(
               });
             }
             outputSlot.block.text = finalText;
-            outputSlot.block.textSignature = encodeTextSignatureV1(item.id, phase);
+            outputSlot.block.textSignature = responsesTextSignature(item.id, phase, rendered);
             const contentIndex = outputSlot.contentIndex;
             if (contentIndex === undefined) {
               throw new Error("Responses stream finalized text without a content index");
             }
-            lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+            lastTextBlock = { block: outputSlot.block, index: contentIndex, phase, rendered };
+            terminal.recordCompletedText(contentIndex, rendered);
             outputs.set(
               item,
               contentIndex,
               readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
               true,
+              rendered.prose,
             );
             stream.push({
               type: "text_end",

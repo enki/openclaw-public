@@ -135,7 +135,7 @@ export async function searchPostgresMemoryVector(
           distance.as("dist"),
         ])
         .where(match)
-        .orderBy(distance)
+        .orderBy("dist")
         .orderBy("c.id")
         .limit(query.limit),
   });
@@ -223,7 +223,13 @@ function textRank(
   query: TextQuery,
   tokenizer?: "unicode61" | "trigram",
 ): RawBuilder<number> {
-  if (tokenizer !== "trigram" || (query.kind !== "all" && query.kind !== "any")) {
+  if (tokenizer !== "trigram") {
+    const rank = fullText.rank(index, query, { postgres: { normalization: 0 } }).value;
+    // Engine-specific calibration, not BM25: native cover density has no corpus IDF.
+    // Saturation gives keywords a useful hybrid weight without dividing by chunk length.
+    return sql<number>`${rank} / (${rank} + 0.1)`;
+  }
+  if (query.kind !== "all" && query.kind !== "any") {
     return fullText.rank(index, query).value;
   }
   // Give each query term equal weight while keeping substring relevance inside PostgreSQL.
