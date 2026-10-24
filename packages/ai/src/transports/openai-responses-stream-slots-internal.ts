@@ -49,6 +49,9 @@ type ResponsesOutputState = {
 
 export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
 
+// Long hidden reasoning may emit only bookkeeping; Codex treats every SSE event as liveness.
+export const RESPONSES_BOOKKEEPING_TIMEOUT_MS = 15 * 60_000;
+
 export function createResponsesOutputTracker(params: {
   output: Pick<AssistantMessage, "content">;
   canRetryIdentityConflict?: () => boolean;

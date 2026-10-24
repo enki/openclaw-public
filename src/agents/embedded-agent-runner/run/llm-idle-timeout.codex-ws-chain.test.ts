@@ -485,7 +485,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       await emitEntered.promise;
       const socket = ControlledWebSocket.instances[0];
       // Both kinds arrive inside the connection's 120s window. Only genuine
-      // reasoning is allowed to extend the independent 240s progress deadline.
+      // reasoning is allowed to extend the independent 15-minute progress deadline.
       const progress = setInterval(() => {
         socket?.deliver(
           activity === "bookkeeping"
@@ -504,11 +504,11 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
                 },
         );
       }, 60_000);
-      await vi.advanceTimersByTimeAsync(300_000);
+      await vi.advanceTimersByTimeAsync(1_020_000);
       clearInterval(progress);
       if (activity !== "hidden reasoning") {
         expect(onIdleTimeout).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ message: "LLM idle timeout (240s): no model progress" }),
+          expect.objectContaining({ message: "LLM idle timeout (900s): no model progress" }),
         );
       } else {
         expect(onIdleTimeout).not.toHaveBeenCalled();

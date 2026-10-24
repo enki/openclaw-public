@@ -101,19 +101,11 @@ describe("processResponsesStream request activity", () => {
       await processResponsesStream(eventStream(events), createOutput(), { push: () => {} }, model, {
         signal: abortController.signal,
       });
-      expect(onActivity.mock.calls).toEqual([
-        [false],
-        [false],
-        [true],
-        [true],
-        [false],
-        [true],
-        [false],
-        [false],
-        [false],
-        [false],
-        [true],
-      ]);
+      expect(onActivity.mock.calls).toEqual(
+        [false, false, true, true, false, true, false, false, false, false, true].map(
+          (progress) => [progress, 900_000],
+        ),
+      );
     } finally {
       unsubscribe();
     }
