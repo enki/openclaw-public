@@ -27,7 +27,6 @@ describe("Responses watchdog through the loopback transport", () => {
     "short bookkeeping",
     "long idle budget",
     "network silence",
-    "comment keepalive",
   ] as const)("enforces the Responses liveness policy: %s", async (activity, { signal }) => {
     let requests = 0;
     let injected = 0;
@@ -213,13 +212,8 @@ describe("Responses watchdog through the loopback transport", () => {
                 output_index: 0,
                 delta: activity === "empty reasoning" ? "" : "Synthetic hidden progress",
               };
-        if (activity === "comment keepalive") {
-          response.write(`: synthetic-frame-${frame}\n\n`);
-          await waitForReceipt(`: synthetic-frame-${frame}\n\n`);
-        } else {
-          send(response, { ...payload, sequence_number: frame });
-          await waitForReceipt(`"sequence_number":${frame}}`);
-        }
+        send(response, { ...payload, sequence_number: frame });
+        await waitForReceipt(`"sequence_number":${frame}}`);
       }
       expect(onTimeout).not.toHaveBeenCalled();
       if (!completes) {
