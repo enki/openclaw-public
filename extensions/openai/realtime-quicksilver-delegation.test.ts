@@ -260,6 +260,9 @@ it("does not start a late control after the active consultation settles", async 
   expect(socket.sent).toHaveLength(2);
   const receipt = parseSent(socket)[0];
   expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
+  const content = receipt.content as Array<{ text: string }>;
+  expect(content).toHaveLength(1);
+  expect(Buffer.byteLength(content[0]!.text, "utf8")).toBeLessThanOrEqual(500);
   const receiptText = JSON.stringify(receipt);
   expect(receiptText).not.toContain("Status:");
   expect(receiptText).toContain("may not be accepted yet");
