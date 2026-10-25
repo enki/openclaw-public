@@ -143,11 +143,12 @@ it.each(["reserved", "indexed"] as const)(
     }
     const client = { connId: "owner", connect: { scopes: ["operator.write"] }, invalidated: false };
     const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
-    const prepare = vi.fn<DescendantCancellation>(async (_params, run) => {
+    const prepare = vi.fn();
+    installHarness(async (_params, run) => {
+      prepare();
       client.invalidated = true;
       return run(cancel);
     });
-    installHarness(prepare);
     const foreignResponse = await invokeChatAbortHandler({
       handler: handleChatAbortRequest,
       context,
