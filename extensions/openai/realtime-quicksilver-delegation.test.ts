@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, expect, it, vi } from "vitest";
@@ -258,11 +259,11 @@ it("does not start a late control after the active consultation settles", async 
   delegate(controller, "late-cancel", "cancel");
   expect(runAgentConsult).toHaveBeenCalledOnce();
   expect(socket.sent).toHaveLength(2);
-  const receipt = parseSent(socket)[0];
+  const receipt = expectDefined(parseSent(socket)[0], "launch acknowledgment");
   expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
   const content = receipt.content as Array<{ text: string }>;
   expect(content).toHaveLength(1);
-  expect(Buffer.byteLength(content[0]!.text, "utf8")).toBeLessThanOrEqual(500);
+  expect(Buffer.byteLength(expectDefined(content[0]).text, "utf8")).toBeLessThanOrEqual(500);
   const receiptText = JSON.stringify(receipt);
   expect(receiptText).not.toContain("Status:");
   expect(receiptText).toContain("may not be accepted yet");
