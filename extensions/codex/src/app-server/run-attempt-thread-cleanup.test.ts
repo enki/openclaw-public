@@ -61,9 +61,10 @@ async function allowNativeToolPreflight(
   since = 0,
 ) {
   // Hook admission and native tool policy each read managed requirements.
+  let nextRequest = since;
   for (let read = 0; read < 2; read += 1) {
-    const request = await waitForHarnessRequest(harness, "configRequirements/read", since);
-    since = harness.writes.length;
+    const request = await waitForHarnessRequest(harness, "configRequirements/read", nextRequest);
+    nextRequest = harness.writes.length;
     harness.send({ id: request.id, result: { requirements: null } });
   }
 }
