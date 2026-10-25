@@ -54,6 +54,8 @@ export async function stopExactClientRun(params: {
   afterParent?: () => void;
   /** Runs after the chat abort is prepared, before it commits. */
   onAbortPrepared?: () => (() => void) | void;
+  /** Records only this captured run's committed cancellation. */
+  onAborted?: () => void;
 }): Promise<ExactClientRunStopResult> {
   const { ops, runId, active } = params;
   // Capture the exact input before any await can select a successor.
@@ -61,6 +63,12 @@ export async function stopExactClientRun(params: {
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
   const result: ExactClientRunStopResult = { aborted: false };
   const assertSource = captureSourceAssertion(active.input, params.assertCurrent);
+  const markAborted = () => {
+    if (!result.aborted) {
+      result.aborted = true;
+      params.onAborted?.();
+    }
+  };
   const assertCurrent = () => {
     assertSource();
     const replacement = getRpcSourceForGateway(runId, getGatewayContextResolver(active.input));
@@ -79,7 +87,7 @@ export async function stopExactClientRun(params: {
       continueChildStop: () => result.aborted,
       onCancelled: (target) => {
         if (target === active.input) {
-          result.aborted = true;
+          markAborted();
         }
       },
       cancelInput: (_input, cancel) =>
@@ -91,9 +99,7 @@ export async function stopExactClientRun(params: {
           assertCurrent,
           stopReason: "rpc",
           onAbortPrepared: params.onAbortPrepared,
-          onAbortCommitted: () => {
-            result.aborted = true;
-          },
+          onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {
         result.descendants = await abortControlledSubagents({

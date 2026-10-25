@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 294961,
-  "reason": "Startup leaf icons, update classification, and lazy English: matched b5b24cf15c2 build 310773 to 294961 B gzip with 7 JS and 1 CSS request.",
-  "updatedAt": "2026-10-23"
+  "startupJsGzipBytes": 281465,
+  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "updatedAt": "2026-10-25"
 }

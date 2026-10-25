@@ -36,7 +36,6 @@ import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../ro
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createPermitPool } from "../../shared/permit-pool.js";
-import type { PreparedStatusSessionStores } from "../../status/session-stores.js";
 import {
   ABSOLUTE_DEADLINE_EXPIRED,
   awaitWithinDeadline,
@@ -75,15 +74,6 @@ const HEALTH_RECENT_SESSION_LIMIT = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
-type HealthSessionStoreCache = {
-  key: string;
-  revision: object;
-  prepared: PreparedStatusSessionStores;
-};
-const healthSessionStores = new WeakMap<
-  SessionRowProjection,
-  WeakMap<OpenClawConfig, HealthSessionStoreCache>
->();
 
 const debugHealth = (
   cfg: OpenClawConfig | undefined,
@@ -159,45 +149,21 @@ async function prepareHealthAgentSummaries(
       .toReversed()
       .map((job) => [job.agentId, job]),
   );
-  // Selection publications invalidate metadata; heartbeat, deletion and age stay live below.
-  const revision =
-    projection && !projection.needsSelectionPreparation() ? projection.state.revision : undefined;
-  const cacheKey = projection ? JSON.stringify([cfg.session?.store, ordered]) : "";
-  const cached = projection ? healthSessionStores.get(projection)?.get(cfg) : undefined;
-  let prepared =
-    revision && cached?.revision === revision && cached.key === cacheKey
-      ? cached.prepared
-      : undefined;
-  if (!prepared) {
-    let recovered = false;
-    prepared = await prepareStatusSessionStores(cfg, ordered, HEALTH_RECENT_SESSION_LIMIT, {
+  const sessionStores = await prepareStatusSessionStores(
+    cfg,
+    ordered,
+    HEALTH_RECENT_SESSION_LIMIT,
+    {
       projection,
       fallbackToUnscopedStore: true,
       recoverReadError(error) {
         if (!isTransientSqliteError(error)) {
           throw error;
         }
-        // Health is best-effort for transient locks; retry rather than retaining the fallback.
-        recovered = true;
         return { count: 0, recent: [], byAgent: new Map() };
       },
-    });
-    if (
-      projection &&
-      revision &&
-      !recovered &&
-      !projection.needsSelectionPreparation() &&
-      projection.state.revision === revision
-    ) {
-      let configs = healthSessionStores.get(projection);
-      if (!configs) {
-        healthSessionStores.set(projection, (configs = new WeakMap()));
-      }
-      // A changed roster replaces its previous snapshots rather than retaining every order.
-      configs.set(cfg, { key: cacheKey, revision, prepared });
-    }
-  }
-  const sessionStores = prepared;
+    },
+  );
   return {
     publish() {
       const stores = sessionStores.publish();
@@ -348,31 +314,26 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  if (params.runtimeOnly && runtimeAccount) {
-    const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeAccount);
-    const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-      channelId: params.plugin.id,
-      accountId: params.accountId,
-      runtime: snapshot,
-    });
-    if (unavailable) {
-      return unavailable;
-    }
-    const healthState = resolveChannelHealthState(snapshot, {
+  const runtimeOnlySnapshot =
+    params.runtimeOnly && runtimeAccount
+      ? buildChannelAccountSnapshotFromRuntime(runtimeAccount)
+      : undefined;
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeOnlySnapshot ?? runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  if (runtimeOnlySnapshot) {
+    const healthState = resolveChannelHealthState(runtimeOnlySnapshot, {
       channelId: params.plugin.id,
       now: Date.now(),
       staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
       channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     });
-    return { ...snapshot, ...(healthState !== undefined ? { healthState } : {}) };
-  }
-  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-    channelId: params.plugin.id,
-    accountId: params.accountId,
-    runtime: runtimeSnapshot,
-  });
-  if (unavailable) {
-    return unavailable;
+    return { ...runtimeOnlySnapshot, ...(healthState !== undefined ? { healthState } : {}) };
   }
   const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({
