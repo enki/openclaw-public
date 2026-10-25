@@ -127,6 +127,52 @@ it.each([
 });
 
 it.each(["reserved", "indexed"] as const)(
+  "exact %s Stop rejects foreign and revoked requesters before native cancellation",
+  async (route) => {
+    await seedYieldedParent();
+    const context = abortContext();
+    const parent = createActiveRun(sessionKey, {
+      runId,
+      sessionId,
+      agentId: "main",
+      queued: route === "reserved",
+      owner: { connId: "owner" },
+    });
+    if (route === "indexed") {
+      rpcSourceTesting.set(runId, parent);
+    }
+    const client = { connId: "owner", connect: { scopes: ["operator.write"] }, invalidated: false };
+    const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
+    const prepare = vi.fn<DescendantCancellation>(async (_params, run) => {
+      client.invalidated = true;
+      return run(cancel);
+    });
+    installHarness(prepare);
+    const foreignResponse = await invokeChatAbortHandler({
+      handler: handleChatAbortRequest,
+      context,
+      request: { sessionKey, runId },
+      client: { connId: "foreign", connect: { scopes: ["operator.write"] } },
+    });
+    expectAbortFailure(foreignResponse, "unauthorized", "INVALID_REQUEST");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(parent.input.abortSignal.aborted).toBe(false);
+    await expect(
+      invokeChatAbortHandler({
+        handler: handleChatAbortRequest,
+        context,
+        request: { sessionKey, runId },
+        client,
+      }),
+    ).rejects.toThrow("Gateway requester authority changed");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    // Reserved sources stop before native preparation; accepted parent effects remain.
+    expect(parent.input.abortSignal.aborted).toBe(route === "reserved");
+  },
+);
+
+it.each(["reserved", "indexed"] as const)(
   "exact %s Stop rejects a retargeted source during lifecycle preparation",
   async (route) => {
     await seedYieldedParent();
