@@ -5,6 +5,7 @@ import {
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
+  runBeforeToolCallHook,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
@@ -29,6 +30,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CodexAppServerClient } from "./client.js";
@@ -41,7 +43,7 @@ import {
 import * as codexRequirements from "./config-requirements.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
-  createHarnessHostCapabilities,
+  createCodexTestHostCapabilities,
   getCodexTestToolFactory,
 } from "./host-capability.test-support.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
@@ -83,6 +85,34 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
     agents: {},
   })),
 }));
+
+function createHarnessHostCapabilities(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams["hostCapabilities"] {
+  return createCodexTestHostCapabilities({
+    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
+      await runBeforeToolCallHook({
+        ...request,
+        approvalMode: approvalMode === "defer" ? "defer" : "request",
+        ctx: Object.freeze({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.config ? { config: params.config } : {}),
+          ...(params.workspaceDir
+            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
+            : {}),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          runId: params.runId,
+          trigger: params.trigger,
+          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+          turnSourceChannel: params.messageChannel ?? params.messageProvider,
+          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        }),
+      }),
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -420,6 +450,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
+    codexHome?: string;
     persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
@@ -433,6 +464,7 @@ export function createAppServerHarness(
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
       agentDir: path.join(tempDir, "wire-agent"),
+      codexHome: options.codexHome,
     });
     setCodexAppServerClientFactoryForTest(
       async (_start, auth, agentDir, _config, clientOptions) => {
@@ -557,20 +589,6 @@ export function createStartedThreadHarness(
   }, options);
 }
 
-export async function startAttempt(
-  requestImpl?: Parameters<typeof createStartedThreadHarness>[0],
-  options?: Parameters<typeof runCodexAppServerAttempt>[1],
-) {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout"],
-    shouldAdvanceTime: false,
-  });
-  const harness = createStartedThreadHarness(requestImpl);
-  const run = runCodexAppServerAttempt(createTestParams(), options);
-  await run.waitForTurnAccepted();
-  return { harness, run };
-}
-
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
@@ -662,8 +680,7 @@ export function setupRunAttemptTestHooks(
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     stubCodexInferenceTransportEnv();
-    // Honor the test runner's isolated TMPDIR, not the operator's shared temp root.
-    tempDir = tempDirs.make("openclaw-codex-run-");
+    tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
     if (options.isolateNativeSkillHome) {
       nativeSkillTestHome ??= tempDir;
       vi.stubEnv("HOME", nativeSkillTestHome);

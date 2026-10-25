@@ -118,58 +118,13 @@ function nativeHarness(
 describe("Codex participant native admission", () => {
   setupRunAttemptTestHooks({ sessionOwner: null });
   it.each([
-    {
-      hooks: "optional",
-      lifecycle: "fresh",
-      participants: "solo",
-      policy: "normal",
-      source: "operator",
-    },
-    {
-      hooks: "managed-only",
-      lifecycle: "resumed",
-      participants: "solo",
-      policy: "normal",
-      source: "operator",
-    },
-    {
-      hooks: "disabled",
-      lifecycle: "fresh",
-      participants: "multiple",
-      policy: "normal",
-      source: "operator",
-    },
-    {
-      hooks: "disabled",
-      lifecycle: "fresh",
-      participants: "multiple",
-      policy: "token-sharing",
-      source: "operator",
-    },
-    {
-      hooks: "optional",
-      lifecycle: "fresh",
-      participants: "solo",
-      policy: "normal",
-      source: "system",
-    },
-    {
-      hooks: "managed-only",
-      lifecycle: "resumed",
-      participants: "solo",
-      policy: "normal",
-      source: "system",
-    },
-    {
-      hooks: "disabled",
-      lifecycle: "fresh",
-      participants: "solo",
-      policy: "normal",
-      source: "system",
-    },
+    { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
+    { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
+    { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
+    { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
-    "handles $participants participants with $hooks native admission on a $lifecycle $policy thread ($source)",
-    async ({ hooks, lifecycle, participants, policy, source }) => {
+    "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
+    async ({ hooks, lifecycle, participants, policy }) => {
       const params = participantParams("participant-model-hooks");
       params.sessionKey = undefined;
       if (policy === "token-sharing") {
@@ -204,12 +159,6 @@ describe("Codex participant native admission", () => {
           throw spawnFailure;
         }
       });
-      if (source === "system") {
-        params.hostCapabilities = createCodexTestHostCapabilities({
-          ...params.hostCapabilities,
-          retainSourceAuthority: () => undefined,
-        });
-      }
       const harness = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "participant-wire-agent"),
         persistedThreads: lifecycle === "resumed" ? ["thread-existing"] : [],
@@ -287,9 +236,6 @@ describe("Codex participant native admission", () => {
               ([method]) => method === (lifecycle === "resumed" ? "thread/resume" : "thread/start"),
             )?.[1];
             expect(request).toBeDefined();
-            if (hooks === "optional") {
-              expect(request).toHaveProperty(["config", "hooks.PreToolUse", 0]);
-            }
             expect(binding.lifecycle.action).toBe(lifecycle === "resumed" ? "resumed" : "started");
             const route = getCodexInferenceThread(harness.client, binding.threadId);
             expect(route).toBeDefined();
@@ -392,7 +338,6 @@ describe("Codex native hook Gateway fallback", () => {
         }
         return undefined;
       });
-      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
       const abort = new AbortController();
       params.abortSignal = abort.signal;
       const run = runCodexAppServerAttempt(params, {
@@ -408,15 +353,8 @@ describe("Codex native hook Gateway fallback", () => {
           }),
         ]);
         expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
-        expect(preflight).toHaveBeenCalledWith(
-          expect.objectContaining({
-            nativeHookRelayRequired: false,
-            nativeCodeModeEnabled: true,
-          }),
-        );
         ready.resolve();
         await run.waitForTurnAccepted();
-        expect(waitUntilReady).toHaveBeenCalled();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         await run;
       } finally {
@@ -457,54 +395,31 @@ describe("Codex native hook Gateway fallback", () => {
     },
   );
 
-  it("permits incumbent-authority steering independently of native hook availability", async () => {
+  it("permits incumbent-authority steering without native hooks or tool search", async () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
-    for (const { hooks, policy, supportsSteering } of [
-      { hooks: "disabled", policy: "normal", supportsSteering: true },
-      { hooks: "optional", policy: "normal", supportsSteering: true },
-      { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
-      { hooks: "disabled", policy: "report-only", supportsSteering: true },
-      { hooks: "disabled", policy: "tool-search-unsupported", supportsSteering: true },
-    ] as const) {
-      registered.mockClear();
-      const params = participantParams(`participant-handle-${hooks}-${policy}`);
-      params.hostCapabilities = participantHostCapabilities(() => {});
-      if (policy === "token-sharing") {
-        useTokenSharing(params);
-      } else if (policy === "report-only") {
-        params.delegationCapability = "report_only";
-      } else if (policy === "tool-search-unsupported") {
-        params.modelId = "gpt-5.4-nano";
-      }
-      const harness = nativeHarness();
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const run = runCodexAppServerAttempt(params, {
-        bindingStore: createCodexTestBindingStore(),
-        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
-      });
-      try {
-        await run.waitForTurnAccepted();
-        expect(registered).toHaveBeenCalledTimes(1);
-        const backend = registered.mock.calls[0]?.[1];
-        expect
-          .soft(backend?.supportsCrossProfileSteering, `${hooks}: ${policy}`)
-          .toBe(supportsSteering);
-        const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
-        if (policy === "token-sharing" || policy === "report-only") {
-          expect(request).toMatchObject({ config: disabledDelegation });
-        } else if (policy === "tool-search-unsupported") {
-          expect(request).toMatchObject({ config: { "features.multi_agent": false } });
-          expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
-          expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
-        }
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        await run;
-      } finally {
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        harness.close();
-      }
+    const params = participantParams("participant-handle");
+    params.hostCapabilities = participantHostCapabilities(() => {});
+    params.modelId = "gpt-5.4-nano";
+    const harness = nativeHarness();
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: createCodexTestBindingStore(),
+      nativeHookRelay: { enabled: false },
+    });
+    try {
+      await run.waitForTurnAccepted();
+      expect(registered.mock.calls[0]?.[1]?.supportsCrossProfileSteering).toBe(true);
+      const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
+      expect(request).toMatchObject({ config: { "features.multi_agent": false } });
+      expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+      expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      harness.close();
     }
   });
   it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {

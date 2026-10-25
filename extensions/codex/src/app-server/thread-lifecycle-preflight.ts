@@ -76,7 +76,6 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
-import { buildCodexThreadToolCatalogPatch } from "./thread-tool-catalog.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export type CodexThreadRequestContext = Awaited<
@@ -338,19 +337,9 @@ export function buildCodexThreadBindingPolicy(
     | "contextEngineBinding"
     | "environmentSelectionFingerprint"
   >,
-  binding?: CodexAppServerThreadBinding,
 ) {
   return {
-    ...buildCodexThreadToolCatalogPatch(
-      binding,
-      params.dynamicTools,
-      preflight.dynamicToolsFingerprint,
-    ),
-    // Resume cannot install declarations onto an older thread with an unknown catalog.
-    dynamicToolsFingerprint:
-      binding && binding.connectionScope !== "supervision" && !binding.dynamicToolsFingerprint
-        ? undefined
-        : preflight.dynamicToolsFingerprint,
+    dynamicToolsFingerprint: preflight.dynamicToolsFingerprint,
     dynamicToolsContainDeferred: preflight.dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint: preflight.nativeSkillIsolationFingerprint,
     userMcpServersFingerprint: preflight.userMcpServersFingerprint,
@@ -509,6 +498,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
+  params.nativeQuestionConfig = effectiveConfig;
   if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,

@@ -18,7 +18,6 @@ type CompletionDeliveryDependencies = {
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
-  drainAssignments: (state: ParentState) => Promise<void>;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
     state: ParentState,
@@ -69,13 +68,6 @@ export class CodexNativeSubagentCompletionDelivery {
         // Stop owns durable cancellation acknowledgement before releasing this child.
         return;
       }
-      // Terminal observation queues its locator before completion admission.
-      // Wait for that owner's committed publication; its prepared read must
-      // continue to deny affected writes while they are pending.
-      await this.dependencies.drainAssignments(state);
-      if (!this.isCurrent(state, childState) || childState.pendingCompletion !== completion) {
-        return;
-      }
       if (
         await this.dependencies.settleNestedCompletion(state, childState, () => {
           if (
@@ -89,7 +81,7 @@ export class CodexNativeSubagentCompletionDelivery {
         this.dependencies.unregisterChild(childState);
         return;
       }
-      if (!this.isCurrent(state, childState) || childState.pendingCompletion !== completion) {
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       if (!this.prepareDelivery(state, childState)) {

@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   agentMessage,
   childTurnCompletedNotification,
   closeAgentNotification,
   createClient,
-  threadRead,
+  directSpawnItem,
+  itemNotification,
   turnStartedNotification,
+  threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
@@ -155,87 +159,96 @@ it("settles delayed close writes without consuming a replacement monitor's resum
   expect(f.deliver).toHaveBeenCalledOnce();
 });
 
-it.each(["current", "gateway-revoked"] as const)(
-  "joins the owned assignment acknowledgement before detached completion (%s)",
-  async (authority) => {
-    const f = await fixture();
-    const client = createClient();
-    const parent = await f.register(client);
-    const recordEntered = createDeferred<void>();
-    const acknowledgeRecord = createDeferred<void>();
-    const pending: { completion?: Promise<void> } = {};
-    onTestFinished(async () => {
-      acknowledgeRecord.resolve();
-      await pending.completion;
-      await parent.unregister();
-      client.close();
-      parent.closeCaller();
-    });
-    await parent.ready;
-    parent.bindTurn("parent-turn");
-    // Leave the first observed native turn for the completion notification path
-    // to persist. The foreground owner has already left when the child ends.
-    await f.spawn(client, false);
-    await parent.unregister();
+it("reads direct and nested native observations only for the registered physical requester", async () => {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(client);
+  await parent.ready;
+  parent.bindTurn("parent-turn");
+  const request = {
+    client: client.client,
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    sessionId: f.identity.sessionId,
+    lifecycleRevision: f.historyOwner().lifecycleRevision,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+    parentThreadId: "parent-thread",
+    historyOwner: f.historyOwner(),
+    assertCurrent: vi.fn(),
+  };
+  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
+  expect(read()).toEqual({ coverage: "live", children: [], truncated: false });
+  await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", "child-thread")));
+  await client.notify(turnStartedNotification("child-turn"));
+  await client.notify(
+    itemNotification(
+      directSpawnItem("v2", "child-thread", "nested-thread"),
+      "child-turn",
+      "child-thread",
+    ),
+  );
+  await client.notify(turnStartedNotification("nested-turn", { threadId: "nested-thread" }));
+  expect(read()).toEqual({
+    coverage: "live",
+    children: [
+      { id: "child-thread", label: "/root/child-thread", status: "running" },
+      { id: "nested-thread", label: "/root/nested-thread", status: "running" },
+    ],
+    truncated: false,
+  });
+  for (const changed of [
+    { sessionId: "foreign-physical-session" },
+    { lifecycleRevision: "foreign-lifecycle" },
+    { storePath: `${request.storePath}.foreign` },
+    { sessionKey: "agent:main:foreign" },
+    { agentId: "foreign" },
+    { historyOwner: { ...request.historyOwner, connectionFingerprint: "f".repeat(64) } },
+  ]) {
+    expect(
+      codexNativeSubagentMonitorRuntime.readNativeSubagents({ ...request, ...changed }),
+    ).toBeUndefined();
+  }
+  await client.notify(childTurnCompletedNotification({ status: "completed" }));
+  await client.notify(
+    childTurnCompletedNotification({
+      status: "interrupted",
+      threadId: "nested-thread",
+      turnId: "nested-turn",
+    }),
+  );
+  expect(read()?.children).toEqual([
+    { id: "child-thread", label: "/root/child-thread", status: "completed" },
+    { id: "nested-thread", label: "/root/nested-thread", status: "interrupted" },
+  ]);
+  // Turn completion is observation, not a fabricated result or consumed delivery receipt.
+  expect(f.deliver).not.toHaveBeenCalled();
+  request.assertCurrent.mockImplementation(() => {
+    throw new Error("Synthetic read scope revoked");
+  });
+  expect(read).toThrow("Synthetic read scope revoked");
+  request.assertCurrent.mockReset();
+  client.close();
+  expect(read()).toBeUndefined();
+});
 
-    const mutate = f.store.mutate.bind(f.store);
-    vi.spyOn(f.store, "mutate").mockImplementation(async (...args) => {
-      const applied = await mutate(...args);
-      const mutation = args[1];
-      if (
-        applied &&
-        mutation.kind === "record-native-subagent-assignment" &&
-        mutation.assignment.nativeTurnId === "child-turn"
-      ) {
-        // Use the actual mutation and its authority; hold only its successful
-        // acknowledgement. The monitor must join its owned producer even when
-        // this test store already exposes the committed row synchronously.
-        recordEntered.resolve();
-        await acknowledgeRecord.promise;
-      }
-      return applied;
-    });
-    await client.notify(turnStartedNotification("child-turn"));
-    const finished = () =>
-      childTurnCompletedNotification({
-        status: "completed",
-        items: [
-          {
-            id: "held-record-final",
-            type: "agentMessage",
-            phase: "final_answer",
-            text: "Result after the assignment acknowledgement.",
-          },
-        ],
-      });
-    const completion = client.notify(finished());
-    pending.completion = completion;
-    await recordEntered.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    expect
-      .soft(f.deliver, "Completion cannot escape its owned assignment write")
-      .not.toHaveBeenCalled();
-    if (authority === "gateway-revoked") {
-      // Revoke actual host-issued custody while the owner awaits its write.
-      parent.closeGateway();
-    }
-    acknowledgeRecord.resolve();
-    await completion;
-    if (authority === "gateway-revoked") {
-      expect(f.deliver).not.toHaveBeenCalled();
-    } else {
-      expect(f.deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          childSessionKey: "codex-thread:child-thread",
-          expectedRequester: {
-            sessionId: f.identity.sessionId,
-            lifecycleRevision: f.historyOwner().lifecycleRevision,
-          },
-          result: "Result after the assignment acknowledgement.",
-        }),
-      );
-      await client.notify(finished());
-      expect(f.deliver).toHaveBeenCalledOnce();
-    }
-  },
-);
+it("does not create an observation owner after an idle parent is pruned", async () => {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(client);
+  await parent.ready;
+  const request = {
+    client: client.client,
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    sessionId: f.identity.sessionId,
+    lifecycleRevision: f.historyOwner().lifecycleRevision,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+    parentThreadId: "parent-thread",
+    historyOwner: f.historyOwner(),
+    assertCurrent() {},
+  };
+  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)?.coverage).toBe("live");
+  await parent.unregister();
+  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)).toBeUndefined();
+  client.close();
+});

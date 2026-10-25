@@ -44,12 +44,7 @@ function oauthProfile(access: string, lifetime = 60 * 60_000, refresh = "refresh
 }
 
 async function completeRun(harness: ReturnType<typeof createAuthHarness>, run: Promise<unknown>) {
-  await Promise.race([
-    harness.waitForMethod("turn/start"),
-    run.then(() => {
-      throw new Error("Auth contract run settled before turn/start");
-    }),
-  ]);
+  await harness.waitForMethod("turn/start");
   await harness.completeTurn();
   await run;
 }
@@ -138,9 +133,6 @@ function createAuthHarness(
       }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
-      }
-      if (method === "thread/inject_items") {
-        return {};
       }
       if (method === "turn/start") {
         return turnStartResult("turn-auth-contract");

@@ -4,6 +4,7 @@ import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -47,7 +48,7 @@ export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): voi
 }
 
 /** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: { name: string }): PluginToolMeta | undefined {
+export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
 }
 
@@ -78,8 +79,18 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 }
 
 /** Builds a collision-proof key for plugin-owned tool metadata lookups. */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
+function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
   return JSON.stringify([pluginId, toolName]);
+}
+
+/** Prepare an ownership-scoped lookup from the caller's admitted metadata. */
+export function createPluginToolMetadataLookup(entries: PluginRegistry["toolMetadata"] = []) {
+  const byOwnerAndName = new Map<string, PluginRegistry["toolMetadata"][number]["metadata"]>();
+  for (const { pluginId, metadata } of entries) {
+    byOwnerAndName.set(buildPluginToolMetadataKey(pluginId, metadata.toolName), metadata);
+  }
+  return (pluginId: string, toolName: string) =>
+    byOwnerAndName.get(buildPluginToolMetadataKey(pluginId, toolName));
 }
 
 /** Binds a side-effect declaration to the concrete plugin tool that owns it. */

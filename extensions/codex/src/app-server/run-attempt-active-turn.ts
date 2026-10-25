@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { composeSessionTranscriptWriteAssertion } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
@@ -20,6 +22,7 @@ import {
   type CodexSteeringQueueOptions,
   type CodexSteeringPreparation,
 } from "./attempt-steering.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -34,11 +37,11 @@ import {
 import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
+import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import { createCodexAttemptReplyMediaPreparer } from "./run-attempt-reply-media.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -52,7 +55,7 @@ import { buildCodexUserInput } from "./user-input.js";
 import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export function activateCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
@@ -78,7 +81,6 @@ export function activateCodexAttemptTurn(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
-    effectiveWorkspace,
   } = connection;
   const { dynamicToolParams, toolBridge } = attemptTools;
   const {
@@ -113,14 +115,38 @@ export function activateCodexAttemptTurn(
         },
       }
     : dynamicToolParams;
+  const hostPrepareReplyMedia = params.hostCapabilities.prepareReplyMedia;
+  const remoteWorkspaceRoot = connection.appServer.remoteWorkspaceRoot;
   const readRemoteWorkspaceFile = createCodexRemoteWorkspaceFileReader(
     resourceState.client,
     connection.authority,
   );
-  const prepareReplyMedia = createCodexAttemptReplyMediaPreparer(
-    connection,
-    readRemoteWorkspaceFile,
-  );
+  const prepareReplyMedia =
+    hostPrepareReplyMedia && remoteWorkspaceRoot
+      ? async (
+          content:
+            | { kind: "attempt"; attempt: EmbeddedRunAttemptResult }
+            | { kind: "payload"; payload: ReplyPayload },
+          transferSignal?: AbortSignal,
+        ) =>
+          hostPrepareReplyMedia({
+            ...content,
+            workspaceRoot: remoteWorkspaceRoot,
+            signal: runAbortController.signal,
+            readWorkspaceFile: (relativePath, { maxBytes, signal }) =>
+              readRemoteWorkspaceFile({
+                path: mapCodexAppServerRemoteWorkspacePath({
+                  value: path.resolve(params.workspaceDir, relativePath),
+                  localWorkspaceRoot: params.workspaceDir,
+                  remoteWorkspaceRoot,
+                }),
+                workspaceRoot: remoteWorkspaceRoot,
+                maxBytes,
+                signal: transferSignal ? AbortSignal.any([signal, transferSignal]) : signal,
+                timeoutMs: connection.appServer.requestTimeoutMs,
+              }),
+          })
+      : undefined;
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
   let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
@@ -308,14 +334,14 @@ export function activateCodexAttemptTurn(
   };
   const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
   const imageContext = {
-    workspaceDir: effectiveWorkspace,
+    workspaceDir: connection.effectiveWorkspace,
     agentWorkspaceDir: params.workspaceDir,
     model: params.model,
     config: params.config,
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId, effectiveWorkspace),
+      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId),
     sandbox:
       connection.sandbox?.enabled && connection.sandbox.fsBridge
         ? { root: connection.sandbox.workspaceDir, bridge: connection.sandbox.fsBridge }
@@ -387,7 +413,8 @@ export function activateCodexAttemptTurn(
       // is recorded only once Codex accepts it, so a rejected steer cannot replay.
       const transcriptItems = items.filter(
         (item) =>
-          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+          (item.isInboundUserReply ?? item.isInboundUserMessage) === true ||
+          item.userTurnTranscriptRecorder !== undefined,
       );
       if (transcriptItems.length === 0) {
         return;
@@ -418,7 +445,7 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
-        if (item.isInboundUserMessage === false) {
+        if ((item.isInboundUserReply ?? item.isInboundUserMessage) === false) {
           continue;
         }
         const recorder = item.userTurnTranscriptRecorder;
@@ -491,8 +518,8 @@ export function activateCodexAttemptTurn(
       unconfirmed = error;
     }
     const recorder =
-      optionsLocal?.isInboundUserMessage === false
-        ? optionsLocal.userTurnTranscriptRecorder
+      (optionsLocal?.isInboundUserReply ?? optionsLocal?.isInboundUserMessage) === false
+        ? optionsLocal?.userTurnTranscriptRecorder
         : undefined;
     if (recorder) {
       recorder.markSentToProvider?.();
@@ -567,9 +594,7 @@ export function activateCodexAttemptTurn(
       deadlines.ownsExecutionWait() &&
       resourceState.turnRoute?.signal.aborted === false &&
       !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      state.activeAppServerTurnRequests === 0 &&
-      state.activeLocalProjections === 0,
+      !state.terminalTurnNotificationQueued,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,

@@ -15,7 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -69,15 +69,16 @@ import {
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
+import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
-  buildCommandCommonRunParams,
   resolveCompletionToolPolicy,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -209,6 +210,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
+  // Sandboxed delegated children never dispatch to host-executed CLI backends;
+  // spawn admission checks once the child model is resolved, and this run-seam
+  // guard owns the invariant for fallback candidates and post-spawn runtime
+  // overrides (the CLI runs on the host while the session is reported sandboxed).
+  assertSandboxedDelegatedChildNotCli({
+    useCliExecution: isCliExecutionProvider,
+    cliExecutionProvider,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+  });
   const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
     resolveCompletionToolPolicy({
       run: params,
@@ -302,11 +315,66 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   const expectation = resolveCommandReplyExpectation(params);
   // Read session fields at invocation time, after admitted CLI binding recovery.
   const buildCommonRunParams = () =>
-    buildCommandCommonRunParams(params, {
+    ({
+      preparedRunAdmission: params.preparedRunAdmission,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      chatType: params.sessionEntry?.chatType,
+      contextWindow: params.sessionEntry?.contextWindow,
+      agentId: params.sessionAgentId,
+      trigger: "user",
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      config: params.cfg,
+      toolOverrides: params.sessionEntry?.toolOverrides,
+      modelHasVision: params.modelHasVision,
+      model: params.modelOverride,
+      modelRoutingProvenance: params.modelRoutingProvenance,
+      thinkLevel: params.resolvedThinkLevel,
+      thinkingExplicit: params.thinkingExplicit,
+      fastMode: params.fastMode,
+      fastModeStartedAtMs: params.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+      timeoutMs: params.timeoutMs,
+      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+      runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration,
+      onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
+      lane: params.opts.lane,
+      swarmExecutionLane: params.opts.swarmExecutionLane,
+      extraSystemPrompt: params.opts.extraSystemPrompt,
+      extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
+      inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
+      skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
+      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
+      clientCaps: params.opts.clientCaps,
+      gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
+      media: params.opts.media,
+      skillsSnapshot: params.skillsSnapshot,
+      streamParams: params.opts.streamParams,
+      approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+      bashElevated: params.opts.bashElevated,
+      cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+      oneShotCliRun: params.opts.oneShotCliRun,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
+      contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+      suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       disableTools,
-      expectation,
+      terminalReplyExpectation: expectation,
+      silentReplyPromptMode:
+        params.opts.silentReplyPromptMode ??
+        (expectation === "result-required" ? "none" : undefined),
+      bootstrapContextMode: params.opts.bootstrapContextMode,
+      bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
       bootstrapPromptWarningSignaturesSeen,
-    });
+      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
+    }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
@@ -690,7 +758,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
   };
-  embeddedRunParams.executionSelection = captureReplyExecutionSelection({
+  embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
     run: { ...embeddedRunParams, sessionFile: params.sessionFile },
     sessionEntry: params.sessionEntry,
   });
@@ -701,3 +769,4 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   );
   return runEmbeddedAgent(embeddedRunParams);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

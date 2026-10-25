@@ -1,9 +1,9 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
-import { bindCoreToolDeclaration } from "./agent-tool-metadata.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
@@ -14,6 +14,7 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
 
@@ -66,22 +67,35 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
-  it("retains declared scheduler guidance across warm descriptor reuse without granting its executor", async () => {
-    const parameters = schema();
-    const shell = () => bindCoreToolDeclaration(tool(parameters, { name: "exec" }));
-    const coreDeclarations = [shell(), tool(schema(), { name: "automations" })];
-    const cold = attempt([shell()], { coreDeclarations });
-    expect(cold.tool().description).toContain(
-      "No sleep loops for reminders/follow-ups; use automations.",
-    );
-    await cold.settle();
-    const warm = attempt([shell()], { coreDeclarations });
-    expect(warm.tool().description).toBe(cold.tool().description);
-    expect(warm.tool().name).toBe("exec");
-    await warm.settle();
-    const withoutScheduler = attempt([shell()], { coreDeclarations: [shell()] });
-    expect(withoutScheduler.tool().description).not.toContain("use automations");
-  });
+  it.each([undefined, {}])(
+    "shares message publications across new sessions (config: %j)",
+    async (config) => {
+      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+      const prewarm = vi.spyOn(toolSchema, "normalizeOpenAIStrictToolParameters");
+      try {
+        const first = createMessageTool({ config });
+        const cold = attempt([first]);
+        const bytes = JSON.stringify(cold.tool().parameters);
+        await cold.settle();
+        const prepared = attempt([createMessageTool({ config })]).tool().parameters;
+        publish.mockClear();
+        prewarm.mockClear();
+        for (let index = 0; index < 8; index++) {
+          const current = createMessageTool({ config, runId: `run-${index}` });
+          expect(current.execute).not.toBe(first.execute);
+          const next = attempt([current], { hookContext: { sessionId: `session-${index}` } });
+          expect(next.tool().parameters).toBe(prepared);
+          expect(JSON.stringify(next.tool().parameters)).toBe(bytes);
+          await next.settle();
+        }
+        expect(publish).not.toHaveBeenCalled();
+        expect(prewarm).not.toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+        prewarm.mockRestore();
+      }
+    },
+  );
 
   it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
     const catalogRef = createToolSearchCatalogRef();

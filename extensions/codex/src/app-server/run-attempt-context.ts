@@ -199,7 +199,6 @@ export async function prepareCodexAttemptContext(
     buildDeveloperInstructions(runtimeParams, {
       // The lifecycle restores this section to creation policy if no relay is selected.
       omitConversationTurnContext: true,
-      // Immutable tool guidance follows the accepted catalog, not per-turn executors.
       dynamicTools: toolBridge.specs,
       nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:

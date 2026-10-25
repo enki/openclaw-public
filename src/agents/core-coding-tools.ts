@@ -9,8 +9,6 @@ import {
 } from "../skills/workspace-skill-read-path.js";
 import {
   bindAgentToolActionDescriptor,
-  bindCoreToolDeclaration,
-  copyAgentToolMetadata,
   type AgentToolActionDescriptor,
 } from "./agent-tool-metadata.js";
 import { getToolParamsRecord, normalizeFileToolPathParam } from "./agent-tools.params.js";
@@ -32,7 +30,6 @@ import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
-import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
@@ -184,7 +181,6 @@ type CoreCodingToolsOptions = {
   containmentRoot: string;
   includeBaseCodingTools: boolean;
   shellTools: "disabled" | "patch-only" | "full";
-  scheduledExecTarget?: Parameters<typeof pinExecToolTarget>[1];
   workspaceOnly: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
@@ -270,7 +266,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 bridge: sandboxFsBridge,
                 normalizeGuardedPathParams: true,
               }
-            : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+            : {
+                resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
+                allowLinkedWorktrees: tool.name !== "ls",
+              },
         )
       : tool;
 
@@ -341,6 +341,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },
@@ -447,20 +448,12 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             }
           : undefined,
       }),
-      bindCoreToolDeclaration(createLazyProcessTool(options.processDefaults)),
+      createLazyProcessTool(options.processDefaults),
     );
   }
   options.recordToolPrepStage?.("shell-tools");
 
   base.forEach((tool) => bindAgentToolActionDescriptor(tool, filesystemAction));
   shell.forEach((tool) => bindAgentToolActionDescriptor(tool, processAction));
-  const tools = [...base, ...shell];
-  const scheduledExecTarget = options.scheduledExecTarget;
-  return scheduledExecTarget
-    ? tools.map((tool) =>
-        tool.name === "exec"
-          ? copyAgentToolMetadata(tool, pinExecToolTarget(tool, scheduledExecTarget))
-          : tool,
-      )
-    : tools;
+  return [...base, ...shell];
 }

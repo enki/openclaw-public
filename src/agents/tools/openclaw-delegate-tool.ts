@@ -8,7 +8,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
@@ -117,6 +116,7 @@ export function createOpenClawDelegateToolsForRun(
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
       "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
@@ -162,5 +162,5 @@ export function createOpenClawDelegateToolsForRun(
       });
     },
   };
-  return [bindCoreToolDeclaration(tool)];
+  return [tool];
 }

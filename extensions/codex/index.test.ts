@@ -31,6 +31,10 @@ import {
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
 import {
+  codexPluginConfig,
+  curatedPlugin,
+} from "./src/app-server/plugin-inventory.test-helpers.js";
+import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -337,7 +341,7 @@ describe("codex plugin", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it("keeps supervision declarations stable and rejects non-owner execution", async () => {
+  it("registers the five shipped supervision tools only when supervision is enabled", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
       createCodexTestApi({
@@ -351,17 +355,8 @@ describe("codex plugin", () => {
     expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
       ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
     ]);
-    const descriptors = (tools: ReturnType<typeof registration.create>) =>
-      tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-    const owner = descriptors(registration.create({ senderIsOwner: true }));
-    for (const tools of [registration.create({ senderIsOwner: false }), registration.create()]) {
-      expect(descriptors(tools)).toEqual(owner);
-      for (const tool of tools) {
-        await expect(tool.execute("private-supervision", {})).rejects.toThrow(
-          "require an owner-authorized sender",
-        );
-      }
-    }
+    expect(registration.create({ senderIsOwner: false })).toEqual([]);
+    expect(registration.create()).toEqual([]);
   });
 
   it.each([
@@ -669,17 +664,9 @@ describe("codex plugin", () => {
         entries: {
           codex: {
             enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                plugins: {
-                  "google-calendar": {
-                    marketplaceName: "openai-curated",
-                    pluginName: "google-calendar",
-                  },
-                },
-              },
-            },
+            config: codexPluginConfig({
+              plugins: { "google-calendar": curatedPlugin("google-calendar") },
+            }),
           },
         },
       },

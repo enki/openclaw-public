@@ -239,19 +239,15 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 }),
               ]);
               expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
-                "configRequirements/read",
                 "config/read",
                 "configRequirements/read",
                 "thread/read",
                 "thread/resume",
                 "thread/inject_items",
-                "thread/inject_items",
                 "turn/start",
-                "configRequirements/read",
                 "config/read",
                 "configRequirements/read",
                 "thread/start",
-                "thread/inject_items",
                 "turn/start",
               ]);
               await harness.notify({
@@ -433,12 +429,10 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
-      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
-      "thread/inject_items",
       "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
@@ -475,11 +469,9 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
-      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "thread/inject_items",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -517,11 +509,9 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
-      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);

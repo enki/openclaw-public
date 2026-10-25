@@ -1,16 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { invalidateCodexComputerFrame } from "./computer-context.js";
-import { getCodexInferenceThread } from "./inference-routing.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import {
-  injectCodexThreadDeveloperHandoff,
-  restoreCodexThreadInstructionsAfterCompaction,
-} from "./thread-policy.js";
-import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
+import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
 ): Promise<void> {
   const { state, prompt } = resources;
   const { runtime, attemptTools } = prompt.context;
@@ -50,20 +45,4 @@ export async function restoreCodexAttemptCompactionContext(
     assertCurrent,
     withCurrent: connection.withCurrent,
   });
-  if (!getCodexInferenceThread(client, thread.threadId)) {
-    await injectCodexThreadDeveloperHandoff(
-      {
-        client,
-        threadId: thread.threadId,
-        timeoutMs: connection.appServer.requestTimeoutMs,
-        signal: runAbortController.signal,
-        assertCurrent,
-        withCurrent: connection.withCurrent,
-      },
-      buildCodexConversationTurnInstructions(
-        runtime.runtimeParams,
-        attemptTools.toolBridge.availableSpecs,
-      ),
-    );
-  }
 }

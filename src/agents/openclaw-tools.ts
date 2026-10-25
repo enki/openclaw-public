@@ -1,27 +1,31 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
-import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
+import {
+  createShowWidgetTool,
+  resolveCurrentChannelWidgetPresenter,
+} from "../canvas/widget-tool.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "./agent-scope.js";
-import { bindCoreToolDeclaration, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
-import { createHostedControlTools } from "./openclaw-tools.control.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
@@ -40,7 +44,7 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
-import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
+import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -49,7 +53,9 @@ import {
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createComputerTool } from "./tools/computer-tool.js";
 import { createHostedConversationTools } from "./tools/conversation-tools.js";
+import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
@@ -65,22 +71,29 @@ import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 import { createMessageTool, createMessageToolAsync } from "./tools/message-tool-execution.js";
+import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-send.js";
+import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { hasSessionControlAuthority } from "./tools/sessions-operator-authority.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
+import { createTerminalTool } from "./tools/terminal-tool.js";
+import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -108,7 +121,6 @@ export async function createOpenClawToolsAsync(
 export async function createOpenClawToolsWithPreparation(
   options: OpenClawToolsOptions | undefined,
   shared: PreparedToolConstruction,
-  onCoreDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): Promise<AnyAgentTool[]> {
   const {
     captured,
@@ -127,7 +139,6 @@ export async function createOpenClawToolsWithPreparation(
     mediaTools,
     progressCardAvailable,
     personalInstructionsEnabled,
-    onCoreDeclaration,
   );
   let next = steps.next();
   while (!next.done) {
@@ -145,6 +156,9 @@ export async function createOpenClawToolsWithPreparation(
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
+  captured.listingClientCaps ??= withLegacySessionCapabilityRead(() =>
+    resolveSessionToolListingClientCaps(captured),
+  );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -180,7 +194,6 @@ function* createOpenClawToolsSteps(
   preparedMediaTools?: Readonly<ReturnType<typeof resolveOptionalMediaToolFactoryPlan>>,
   preparedProgressCardAvailable?: boolean,
   personalInstructionsEnabled = false,
-  onCoreDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): Generator<
   | { message: Parameters<typeof createMessageTool>[0] }
   | { plugins: Parameters<typeof resolveOpenClawPluginToolsForOptions>[0] },
@@ -213,8 +226,29 @@ function* createOpenClawToolsSteps(
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
-  const widgetPresentation = resolveWidgetPresentationForRun(options);
-  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const widgetDeliveryContext = normalizeDeliveryContext({
+    channel: options?.agentChannel,
+    to: options?.agentTo ?? options?.currentMessagingTarget ?? options?.currentChannelId,
+    accountId: options?.agentAccountId,
+    threadId: options?.agentThreadId,
+  });
+  const widgetSessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  const widgetPresenterContext = {
+    messageChannel: options?.agentChannel,
+    accountId: options?.agentAccountId,
+    deliveryContext: widgetDeliveryContext,
+    nativeChannelId: options?.nativeChannelId,
+    currentChannelId: options?.currentChannelId,
+    currentMessagingTarget: options?.currentMessagingTarget,
+    sessionKey: widgetSessionKey,
+  };
+  const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);
+  const currentChannelWidgetPresenter = resolveCurrentChannelWidgetPresenter(
+    widgetPresenters,
+    widgetPresenterContext,
+  );
+  const inlineWidgetClientAvailable =
+    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -245,6 +279,8 @@ function* createOpenClawToolsSteps(
     });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  // A scheduled run's execution context names the session its board belongs to.
+  const scheduledTargets = options?.scheduledToolTargets;
   const mediaGenerationAgentSessionKey =
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
@@ -272,7 +308,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext,
+    requesterOrigin: widgetDeliveryContext,
     workspaceDir,
     sandbox,
   };
@@ -370,12 +406,10 @@ function* createOpenClawToolsSteps(
     agentId: sessionAgentId,
     agentSessionKey: requesterSessionKey,
   });
-  const nodesTool = bindCoreToolDeclaration(
-    applyNodesToolWorkspaceGuard(nodesToolBase, {
-      ...options,
-      workspaceDir,
-    }),
-  );
+  const nodesTool = applyNodesToolWorkspaceGuard(nodesToolBase, {
+    ...options,
+    workspaceDir,
+  });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
   const explicitFactoryAllowlist = mergeFactoryPolicyList(
@@ -392,15 +426,24 @@ function* createOpenClawToolsSteps(
     allowlist: options?.runtimeToolAllowlist,
     denylist: explicitFactoryDenylist,
   });
+  const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
   // Admitted Control UI recovery and explicitly capped scheduled turns can
   // keep authoring their durable board without claiming an inline renderer.
-  const pinnedWidgetOnly =
+  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
+  const scheduledCaller =
+    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
+  const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
-      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
-    !inlineWidgetClientAvailable &&
-    !widgetPresentation.currentChannelPresenter &&
-    Boolean(sessionKey) &&
-    !isCronRunSessionKey(sessionKey);
+      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
+    !currentChannelWidgetPresenter &&
+    Boolean(widgetBoardSessionKey) &&
+    !isCronRunSessionKey(widgetBoardSessionKey);
+  const pinnedWidgetOnly = pinnedWidgetAuthoringAdmitted && !inlineWidgetClientAvailable;
+  // The catalog follows the session's recorded caps; a recovered turn without that client still pins.
+  const pinWidgetWithoutInlineClient =
+    pinnedWidgetAuthoringAdmitted &&
+    inlineWidgetClientAvailable &&
+    options?.clientCaps?.includes("inline-widgets") !== true;
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -429,32 +472,70 @@ function* createOpenClawToolsSteps(
         onPlanSaved: options?.onProgressCardPlanSaved,
       })
     : null;
-  const transcriptsTool = resolveTranscriptsTool(
-    resolvedConfig,
-    sessionAgentId,
-    options,
-    onCoreDeclaration,
-  );
+  const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentSessionKey:
+        scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
+      assertTargetCurrent: scheduledTargets?.assertCurrent,
       agentId: sessionAgentId,
     }),
     ...(embedded
       ? []
-      : createHostedControlTools(
-          options,
-          {
-            nodesTool,
-            sessionAgentId,
-            gatewayCallerAccountId,
-            deliveryContext,
-            sessionConfig,
-          },
-          onCoreDeclaration,
-        )),
+      : [
+          nodesTool,
+          createMobileUiTool({ idempotencyScope: options?.runId }),
+          options?.modelHasVision === false || options?.computerTransport === null
+            ? null
+            : createComputerTool({
+                ...options,
+                transport: options?.computerTransport,
+                // The tool combines this run scope with the assistant turn and provider call id.
+                idempotencyScope: options?.runId,
+                contextEpoch: options?.computerContextEpoch,
+              }),
+          createCronTool({
+            ...options,
+            readOnly: options?.forceRestartSafeTools,
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+            agentAccountId: gatewayCallerAccountId,
+            currentDeliveryContext: deliveryContext,
+            sandboxContext: options?.cronSandboxContext,
+            creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
+          }),
+          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
+          createSessionsTool({
+            ...options,
+            stopAllowed: options?.swarmCollector !== true,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
+            requesterAgentIdOverride: sessionAgentId,
+            config: sessionConfig,
+          }),
+          createScreenTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+          }),
+          createThemeTool(),
+          ...(options?.sandboxed
+            ? []
+            : [
+                createTerminalTool({
+                  ...options,
+                  agentId: sessionAgentId,
+                  agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                }),
+                ...createAvailablePortalTools(options),
+              ]),
+        ]),
     ...(!embedded && sessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
           sessionKey,
@@ -463,19 +544,19 @@ function* createOpenClawToolsSteps(
         })
       : []),
     includeMessageTool ? messageTool : null,
-    !isCoreCanvasHostEnabled(resolvedConfig) &&
-    !hasRegisteredShowWidgetKinds() &&
-    !widgetPresentation.currentChannelPresenter
+    !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({
           sessionId: options?.sessionId,
           agentId: sessionAgentId,
-          agentSessionKey: sessionKey,
+          agentSessionKey: widgetBoardSessionKey,
+          assertTargetCurrent: scheduledTargets?.assertCurrent,
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,
-          presenters: widgetPresentation.presenters,
-          presenterContext: widgetPresentation.context,
+          pinWithoutInlineClient: pinWidgetWithoutInlineClient,
+          presenters: widgetPresenters,
+          presenterContext: widgetPresenterContext,
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),

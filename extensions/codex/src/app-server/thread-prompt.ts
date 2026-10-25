@@ -66,7 +66,7 @@ export function splitCodexExtraSystemPrompt(
   };
 }
 
-/** Complete snapshot on the existing refreshable/parent-local carrier, never native delta cache. */
+/** Complete current snapshot for the existing parent-local inference relay. */
 export function buildCodexConversationTurnInstructions(
   params: Pick<CodexThreadPromptContext, "extraSystemPrompt" | "extraSystemPromptTurnContext">,
   availableDynamicTools: readonly CodexDynamicToolSpec[],

@@ -27,7 +27,6 @@ import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/sessio
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
@@ -67,7 +66,6 @@ import {
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import {
   createSessionsSendSessionReaders,
-  sessionsSendEndpoint,
   withSessionsSendRequesterSource,
 } from "./sessions-send-session-source.js";
 import {
@@ -425,7 +423,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         );
       }
       const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
-      if (mode === "notify" && expectedSessionId) {
+      // A durable parent's binding is not temporary, but explicit invocation ceilings remain.
+      const persistentChildAccess =
+        access.basis === "parent-lineage" && opts?.expectedTargetSessionId === undefined;
+      if (mode === "notify" && expectedSessionId && !persistentChildAccess) {
         return sendFailure(
           "forbidden",
           "Notifications cannot outlive an exact-session access grant. Use steer or followup.",
@@ -477,8 +478,18 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           ) {
             dispatchMessage = `${formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE)}\n\n${dispatchMessage}`;
           }
-          const source = sessionsSendEndpoint(requesterSession, requesterSessionEntry);
-          const targetEndpoint = () => sessionsSendEndpoint(targetSession, targetSessionEntry);
+          const source = {
+            agentId: requesterSession.agentId,
+            sessionKey: requesterSession.canonicalKey,
+            storePath: requesterSession.readSource?.path ?? requesterSession.storePath,
+            entry: requesterSessionEntry,
+          };
+          const targetEndpoint = () => ({
+            agentId: targetSession.agentId,
+            sessionKey: targetSession.canonicalKey,
+            storePath: targetSession.readSource?.path ?? targetSession.storePath,
+            entry: targetSessionEntry,
+          });
           let communication: Awaited<ReturnType<typeof prepareSessionsSendCommunication>>;
           try {
             communication = await prepareSessionsSendCommunication({
@@ -493,6 +504,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 watch: params.watch === true,
                 requesterOwned: visibleSession.requesterOwned,
                 authorizationTargetSessionKey: authorizationTargetKey,
+                controllerOnly: access.basis === "live-controller",
                 expectedSessionId,
               },
               assertSourceCurrent: opts?.assertSourceCurrent,
@@ -603,7 +615,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 return prepareSessionsSendCommunication({
                   config: cfg,
                   source,
-                  target: sessionsSendEndpoint(fallback, fallback.store[fallback.canonicalKey]),
+                  target: {
+                    agentId: fallback.agentId,
+                    sessionKey: fallback.canonicalKey,
+                    storePath: fallback.readSource?.path ?? fallback.storePath,
+                    entry: fallback.store[fallback.canonicalKey],
+                  },
                   message,
                   dispatchMessage: sendParams.message,
                   inputProvenance,
@@ -643,8 +660,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               await dispatchSessionsSendFollowup(startParams, replyContext, {
                 message,
                 ownChild,
+                persistentChildAccess,
                 nativeChild: !targetAcpMeta,
-                claimRequesterTurnCompletion: timeoutSeconds === 0,
                 requesterSessionKey: requesterSession.canonicalKey,
                 requesterAgentId,
                 requesterTurnRunId: opts?.requesterTurnRunId,
@@ -656,6 +673,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               start,
               completion,
               registryCompletion,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               watchField,
               replyContext,
               targetSession,
@@ -676,5 +694,5 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
   };
   const execute = tool.execute;
   tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
-  return bindCoreToolDeclaration(tool);
+  return tool;
 }

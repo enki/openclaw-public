@@ -2,7 +2,6 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { getCoreToolDeclaration, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   resolveConversationCapabilityProfile,
@@ -61,15 +60,15 @@ export function createEmbeddedMessageInvocationPolicy(params: {
       additionalPolicyAllow: params.toolSearchControlAllowlist,
     });
   const policies = resolvePolicies(params.capabilityProfile);
-  const filterCatalog = <T extends CoreToolDeclaration>(
-    currentProfile: ResolvedConversationCapabilityProfile,
-    tools: T[],
-    onFilter?: (event: ToolPolicyFilterEvent<T>) => void,
+  const filter = (
+    currentProfile = params.capabilityProfile,
+    onFilter?: (event: ToolPolicyFilterEvent) => void,
+    // Listing retains the requester's own ceiling; completion replay only gates calls.
     scope: "turn" | "session" = "turn",
-  ): T[] => {
+  ): AnyAgentTool[] => {
     const currentPolicies =
       currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
-    const { declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
+    const { tools, declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
     return applyToolPolicyPipeline({
       tools,
       toolMeta: (tool) => getPluginToolMeta(tool),
@@ -85,9 +84,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
           inheritedToolPolicy:
-            scope === "session" &&
-            currentProfile.policy.requesterPolicySource === "completion-handoff"
-              ? undefined
+            scope === "session"
+              ? params.capabilityProfile.policy.sessionInheritedToolPolicy
               : policies.inheritedToolPolicy,
         },
         includeRuntimeToolPolicy: true,
@@ -97,22 +95,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
       onFilter,
     });
   };
-  const filter = (
-    currentProfile = params.capabilityProfile,
-    onFilter?: (event: ToolPolicyFilterEvent) => void,
-    scope: "turn" | "session" = "turn",
-  ) => filterCatalog(currentProfile, params.catalog().tools, onFilter, scope);
   return {
     filter,
-    // Only literal, producer-identified core definitions omit transient owner
-    // selection and completion-only replay; persistent sender and resource ceilings remain.
-    coreDeclarationSources: (declaredOnly: CoreToolDeclaration[] = []) =>
-      filterCatalog<CoreToolDeclaration>(
-        params.capabilityProfile,
-        [...params.catalog().tools, ...declaredOnly],
-        undefined,
-        "session",
-      ).filter((tool) => getCoreToolDeclaration(tool) !== undefined),
     admit: createScheduledMessageInvocationAdmission({
       config: params.config,
       isAllowed: (config) => {

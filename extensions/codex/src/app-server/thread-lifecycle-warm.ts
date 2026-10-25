@@ -15,6 +15,7 @@ import {
   releaseCodexAppServerLiveThread,
   readCodexLiveThreadEphemeralPolicy,
 } from "./client-runtime.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -54,7 +55,6 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
-import { buildCodexThreadToolCatalogPatch } from "./thread-tool-catalog.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -200,6 +200,12 @@ export async function releaseCodexBoundLiveThread(
         }
       });
     });
+    // The exact closure may have arrived before this handoff could subscribe.
+    // Runtime notification delivery records the physical-client receipt before
+    // this synchronous check; later generations clear it when they retain.
+    if (wasCodexAppServerThreadClosed(client, options.threadId)) {
+      threadClosed = Promise.resolve();
+    }
   }
   try {
     if (
@@ -562,7 +568,6 @@ export async function tryReuseCodexLiveThread(
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
     const bindingPatch = {
-      ...buildCodexThreadToolCatalogPatch(binding, params.dynamicTools, dynamicToolsFingerprint),
       cwd: params.cwd,
       model,
       modelProvider,

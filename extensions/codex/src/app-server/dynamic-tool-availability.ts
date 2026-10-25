@@ -1,8 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   finalizeAgentToolAvailability,
   type AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   projectCodexDynamicTools,
   type CodexDynamicToolSchemaQuarantine,
@@ -16,7 +16,7 @@ export function finalizeCodexToolAvailability(
   acceptedSpecs?: readonly CodexDynamicToolSpec[],
 ) {
   const accepted = acceptedSpecs
-    ? new Map(flattenCodexDynamicToolFunctions(acceptedSpecs).map((tool) => [tool.name, tool]))
+    ? new Map(flattenCodexDynamicToolFunctions(acceptedSpecs).map((spec) => [spec.name, spec]))
     : undefined;
   let candidates = entries;
   const preparedNames = new Set<string>();
@@ -51,22 +51,15 @@ export function finalizeCodexToolAvailability(
     const matching = tools.filter((entry) => {
       const declaration = accepted.get(entry.name);
       return (
-        declaration !== undefined &&
-        fingerprintCodexPolicy({
-          description: entry.description,
-          inputSchema: entry.inputSchema,
-        }) ===
-          fingerprintCodexPolicy({
-            description: declaration.description,
-            inputSchema: declaration.inputSchema,
-          })
+        declaration?.description === entry.description &&
+        isDeepStrictEqual(declaration.inputSchema, entry.inputSchema)
       );
     });
     if (matching.length === candidates.length || matching.length === 0) {
       return { tools: matching, quarantinedTools, preparedNames };
     }
-    // Rejected dependencies cannot keep a surviving executor's affordances.
-    // Each repeat removes at least one candidate, so preparation is bounded.
+    // Removing an incompatible executor can change a dependent owner's contract.
+    // Reprepare only the surviving cohort; every retry removes at least one tool.
     candidates = matching;
   }
 }

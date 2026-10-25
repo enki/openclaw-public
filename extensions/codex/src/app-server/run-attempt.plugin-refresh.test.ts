@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildEmptyToolTelemetry } from "./event-projector.test-harness.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -81,10 +82,8 @@ describe("managed Codex plugin refresh", () => {
         scenario === "host-persisted" || scenario === "admitted-continuation";
       const steeringAccepted = createDeferred<void>();
       const steeringImage = { type: "image" as const, data: STEERING_PNG, mimeType: "image/png" };
-      const steeringImagePath = path.join(tempDir, "workspace", "steering.png");
+      const steeringImagePath = path.join(tempDir, "steering.png");
       if (scenario === "admitted-continuation") {
-        // This admitted attachment belongs to the session, not its isolated temp parent.
-        await fs.mkdir(path.dirname(steeringImagePath), { recursive: true });
         await fs.writeFile(steeringImagePath, Buffer.from(STEERING_PNG, "base64"));
       }
       const events: string[] = [];
@@ -332,14 +331,7 @@ describe("managed Codex plugin refresh", () => {
         harness.send({
           id,
           method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId,
-            namespace: null,
-            tool,
-            arguments: tool === "message" ? { action: "send" } : {},
-          },
+          params: createDynamicToolCall(tool, tool === "message" ? { action: "send" } : {}, callId),
         });
         return reply.promise;
       };

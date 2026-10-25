@@ -287,6 +287,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
+  extraSystemPromptTurnContext: undefined,
   replyExpectation: undefined,
   skillLibraryAuthoring: undefined,
   cronCreatorAuthorityCapability: undefined,
