@@ -63,7 +63,10 @@ export async function loadCodexAttemptNativeToolCatalog(
   }
   // Managed ephemeral threads have no rollout. Their retained live owner already
   // enforces creation-policy stability without recovering declarations from disk.
+  // Restricted discovery threads may not have accepted a turn or materialized
+  // metadata yet; the lifecycle owns their transition to a normal conversation.
   if (
+    binding.restrictedThreadConfigFingerprint ||
     params.ephemeral ||
     (params.appServer.start.transport !== "stdio" && params.appServer.start.transport !== "unix") ||
     params.appServer.remoteWorkspaceRoot
