@@ -66,17 +66,20 @@ suite.define(() => {
           },
         );
         await writeFile(suite.artifactDir + `/latest-${width}.png`, frame.png);
-        const earlier = page.getByRole("button", { name: "Show earlier messages", exact: true });
+        const earlier = page.getByRole("button", {
+          name: "Show earlier unsent messages",
+          exact: true,
+        });
         expect(
           await page
             .locator(".chat-footer")
-            .getByRole("button", { name: "Show earlier messages", exact: true })
+            .getByRole("button", { name: "Show earlier unsent messages", exact: true })
             .count(),
         ).toBe(0);
         expect(
           await page
             .locator(".chat-thread")
-            .getByRole("button", { name: "Show earlier messages", exact: true })
+            .getByRole("button", { name: "Show earlier unsent messages", exact: true })
             .count(),
         ).toBe(1);
 
@@ -86,7 +89,7 @@ suite.define(() => {
         await earlier.waitFor();
         await earlier.click();
         const backToLatest = page.getByRole("button", {
-          name: "Show latest messages",
+          name: "Show latest unsent messages",
           exact: true,
         });
         await backToLatest.waitFor();
@@ -133,4 +136,59 @@ suite.define(() => {
       });
     },
   );
+
+  it("waits for the start of the conversation before showing unsent-message paging", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
+      const sessionId = "session:agent:main:main";
+      const message = (seq: number) => ({
+        role: "assistant",
+        content: `Synthetic conversation message ${seq}.`,
+        timestamp: 1 + seq,
+        __openclaw: { id: `message-${seq}`, seq },
+      });
+      const pendingInputs = {
+        items: [
+          {
+            id: "saved-input",
+            runId: "saved-run",
+            acceptedAt: 1,
+            state: "cancelled",
+            message: { role: "user", content: "Synthetic cancelled request" },
+          },
+        ],
+        total: 41,
+        queuedCount: 0,
+        nextBefore: 21,
+      };
+      const historyPage = (from: number, to: number, hasMore: boolean) => ({
+        sessionId,
+        messages: Array.from({ length: to - from + 1 }, (_, index) => message(from + index)),
+        hasMore,
+        nextOffset: hasMore ? 20 : undefined,
+        totalMessages: 40,
+        pendingInputs,
+      });
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.history"],
+        methodResponses: { "chat.startup": historyPage(21, 40, true) },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.getByText("Synthetic conversation message 40.", { exact: true }).waitFor();
+      const thread = page.locator(".chat-thread");
+      const earlierUnsent = thread.getByRole("button", {
+        name: "Show earlier unsent messages",
+        exact: true,
+      });
+      const showEarlier = thread.getByRole("button", { name: "Show earlier", exact: true });
+      await showEarlier.waitFor({ state: "attached" });
+      expect(await earlierUnsent.count()).toBe(0);
+
+      await showEarlier.click();
+      await gateway.waitForRequest("chat.history");
+      expect(await earlierUnsent.count()).toBe(0);
+      await gateway.resolveDeferred("chat.history", historyPage(1, 20, false));
+      await earlierUnsent.waitFor({ state: "attached" });
+      expect(await thread.locator(".chat-history-boundary").count()).toBe(0);
+    });
+  });
 });

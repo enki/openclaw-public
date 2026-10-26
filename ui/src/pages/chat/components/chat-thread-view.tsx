@@ -139,23 +139,19 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  // The supplement takes the header only once the transcript has no earlier page,
+  // so its controls never stack under the history boundary.
   const headerContent = (
-    <>
-      <Show when={input.props.historyPagination}>
-        {(pagination) => <ChatHistoryBoundary {...pagination()} />}
-      </Show>
-      {input.historySupplement?.content}
-    </>
+    <Show when={input.props.historyPagination} fallback={input.historySupplement?.content}>
+      {(pagination) => <ChatHistoryBoundary {...pagination()} />}
+    </Show>
   );
-  const historyHeader = (): TranscriptHeader | null =>
-    input.props.historyPagination || input.historySupplement
-      ? {
-          content: headerContent,
-          height:
-            (input.props.historyPagination ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX : 0) +
-            (input.historySupplement?.height ?? 0),
-        }
-      : null;
+  const historyHeader = (): TranscriptHeader | null => {
+    const height = input.props.historyPagination
+      ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX
+      : input.historySupplement?.height;
+    return height === undefined ? null : { content: headerContent, height };
+  };
   const historySentinel = (
     <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
   );
